@@ -10,6 +10,7 @@ from pathlib import Path
 
 import builds
 import library
+import migration
 import nxnative
 import settings
 import titledb
@@ -43,11 +44,18 @@ class Native:
         from AppKit import NSURL, NSWorkspace
         NSWorkspace.sharedWorkspace().activateFileViewerSelectingURLs_([NSURL.fileURLWithPath_(str(path))])
 
-    def confirm(self, message):
+    def game_running(self, game):
+        if not game.app:
+            return False
+        from AppKit import NSRunningApplication
+        bundle_id = f"org.nxnative.{game.title_id.lower()}"
+        return bool(NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle_id))
+
+    def confirm(self, message, action="Quit"):
         from AppKit import NSAlert, NSAlertFirstButtonReturn
         alert = NSAlert.alloc().init()
         alert.setMessageText_(message)
-        alert.addButtonWithTitle_("Quit")
+        alert.addButtonWithTitle_(action)
         alert.addButtonWithTitle_("Cancel")
         return alert.runModal() == NSAlertFirstButtonReturn
 
@@ -108,11 +116,13 @@ class Native:
 
 class SwitchPlayerApp:
     def __init__(self, data_dir=None, first_launch=settings.nxplay_preferences, builder=None,
-                 native=None, dispatch=dispatch):
+                 native=None, dispatch=dispatch, save_root=None, game_running=None):
         self._native = native or Native()
         self._dispatch = dispatch
         self._data_dir = Path(data_dir) if data_dir is not None else DATA_DIR
         self._log_dir = self._data_dir / "Logs" if data_dir is not None else LOG_DIR
+        self._save_root = Path(save_root) if save_root is not None else self._default_save_root()
+        self._game_running = game_running or self._native.game_running
         self._settings = settings.Settings(self._data_dir / "settings.json", first_launch=first_launch)
         self._titledb = titledb.TitleDB(self._data_dir / "titledb")
         self._builder = builder
@@ -124,6 +134,11 @@ class SwitchPlayerApp:
         self._title_lock = threading.Lock()
         self._window = None
         self._caffeinate = None
+
+    def _default_save_root(self):
+        if os.environ.get("SWITCHPLAYER_DATA_DIR"):
+            return self._data_dir / "nxnative-saves"
+        return Path.home() / "Library" / "Application Support" / "nxnative"
 
     @staticmethod
     def _art_key(path):
@@ -207,6 +222,10 @@ class SwitchPlayerApp:
                                            Path(__file__).parent / "nxnative-python" / "pyproject.toml")
         copy.update()
         environment.ensure()
+        game = self._games.get(job.game_id)
+        if game and game.title_id:
+            migration.first_build(game.path / f"{game.title_id}_build" / "run" / "save",
+                                  self._save_root / game.title_id / "save")
         return nxnative.build_command(copy, environment, job.path, keys_file=values["keys_file"],
                                       options=values["build_options"].get(job.game_id, ""))
 
@@ -336,6 +355,35 @@ class SwitchPlayerApp:
     def _set_build_options(self, game_id, text):
         self._settings.set_build_options(game_id, text)
 
+    def _import_nxplay_save(self, game_id):
+        game = self._games.get(game_id)
+        if not game or not game.title_id or self._game_running(game):
+            return False
+        source = game.path / f"{game.title_id}_build" / "run" / "save"
+        destination = self._save_root / game.title_id / "save"
+        try:
+            details = migration.import_details(source, destination, running=False)
+        except nxnative.NxnativeError as e:
+            log.warning("NX Play save import: %s", e)
+            return False
+
+        def date(value):
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(value)) if value else "No save yet"
+        message = (f"Import the NX Play save for {game.name()}?\n\n"
+                   f"NX Play save: {date(details['nxplay_date'])}\n"
+                   f"Current save: {date(details['current_date'])}\n\n"
+                   "The current save will be backed up before it is replaced.")
+        if not self._native.confirm(message, "Import"):
+            return False
+        if self._game_running(game):
+            return False
+        try:
+            migration.import_save(source, destination)
+            return True
+        except nxnative.NxnativeError as e:
+            log.warning("NX Play save import: %s", e)
+            return False
+
 
 class Api:
     """The page can call only public methods; application internals stay behind underscores."""
@@ -377,7 +425,7 @@ class Api:
         self._app._set_build_options(game_id, text)
 
     def import_nxplay_save(self, game_id):
-        return False
+        return self._app._import_nxplay_save(game_id)
 
     def log_error(self, message):
         log.warning("Page error: %s", str(message)[:1000])
