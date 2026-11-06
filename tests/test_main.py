@@ -12,8 +12,9 @@ import nxnative
 
 
 @pytest.fixture(autouse=True)
-def no_title_downloads(monkeypatch):
+def no_background_downloads(monkeypatch):
     monkeypatch.setattr(main.titledb.TitleDB, "update", lambda self, tids: set())
+    monkeypatch.setattr(main.SwitchPlayerApp, "_refresh_freshness", lambda self: None)
 
 
 def test_library_waits_for_a_folder_choice(tmp_path):
@@ -490,7 +491,9 @@ def test_run_wires_the_real_page_to_a_private_pywebview_window(tmp_path):
     assert native.calls == [("lifecycle", app)]
     menu = webview.kwargs["menu"][0]
     assert menu.title == "__app__"
-    assert [item.title for item in menu.items] == ["Choose Library Folder…", "Choose Keys File…"]
+    assert [item.title for item in menu.items] == [
+        "Choose Library Folder…", "Choose Keys File…", "Check for nxnative Changes Now",
+    ]
 
 
 def test_page_library_choice_uses_the_native_dispatcher(tmp_path):
@@ -634,3 +637,105 @@ def test_save_import_does_not_offer_a_missing_source(tmp_path):
     assert api.import_nxplay_save("Rhythm Heaven") is False
     assert native.calls == []
     assert (destination / "current").read_text() == "Switch Player"
+
+
+def test_library_reports_freshness_after_a_background_fetch(tmp_path, monkeypatch):
+    tid = "0100D9F01D474000"
+    folder = tmp_path / "Switch Games" / "Rhythm Heaven"
+    contents = folder / "Rhythm Heaven Groove.app" / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({
+        "DMTitleID": tid,
+        "CFBundleDisplayName": "Rhythm Heaven Groove",
+        "DMCommit": "123456789abc",
+        "DMChain": "b-41",
+    }))
+    import threading
+    started = threading.Event()
+    release = threading.Event()
+
+    def freshness(self, apps):
+        started.set()
+        release.wait(5)
+        return {tid: {"out_of_date": True, "newer": 142}}
+
+    monkeypatch.undo()
+    monkeypatch.setattr(nxnative.Copy, "freshness", freshness)
+    app = main.SwitchPlayerApp(
+        data_dir=tmp_path / "data",
+        first_launch=lambda: {"library_folder": str(folder.parent)},
+    )
+    api = main.Api(app)
+
+    assert api.library()["games"][0]["out_of_date"] is False
+    assert started.wait(5)
+    release.set()
+    deadline = time.monotonic() + 5
+    while not api.library()["games"][0]["out_of_date"] and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    game = api.library()["games"][0]
+    assert game["out_of_date"] is True
+    assert game["newer"] == 142
+
+
+def test_freshness_refreshes_daily_or_on_demand(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    calls = []
+    monkeypatch.setattr(main.SwitchPlayerApp, "_fetch_freshness", lambda self: calls.append("fetch"))
+    now = [1000]
+    monkeypatch.setattr(main.time, "time", lambda: now[0])
+    app = main.SwitchPlayerApp(data_dir=tmp_path, first_launch=dict)
+
+    app._refresh_freshness()
+    app._freshness_thread.join(5)
+    app._refresh_freshness()
+    assert calls == ["fetch"]
+
+    now[0] += 86400
+    app._refresh_freshness()
+    app._freshness_thread.join(5)
+    app._refresh_freshness(force=True)
+    app._freshness_thread.join(5)
+    assert calls == ["fetch", "fetch", "fetch"]
+
+
+def test_wake_observation_uses_the_native_notification_center(monkeypatch):
+    calls = []
+    observer = object()
+
+    class Center:
+        def addObserverForName_object_queue_usingBlock_(self, name, obj, queue, block):
+            calls.append((name, block))
+            return observer
+
+    class Workspace:
+        def notificationCenter(self):
+            return Center()
+
+    class AppKit:
+        NSWorkspaceDidWakeNotification = "wake"
+        NSApplicationActivationPolicyRegular = 0
+        NSApp = type("App", (), {"setActivationPolicy_": lambda self, policy: None})()
+        NSWorkspace = type("WorkspaceNamespace", (), {"sharedWorkspace": lambda: Workspace()})
+
+    class Delegate:
+        pass
+
+    monkeypatch.setitem(sys.modules, "AppKit", AppKit)
+    monkeypatch.setitem(sys.modules, "objc", type("ObjC", (), {
+        "classAddMethods": lambda cls, methods: None,
+        "selector": lambda function, **kwargs: function,
+    }))
+    monkeypatch.setitem(sys.modules, "webview.platforms.cocoa", type("Cocoa", (), {
+        "BrowserView": type("Browser", (), {"AppDelegate": Delegate}),
+    }))
+    native = main.Native()
+    app = type("App", (), {"_refresh_freshness": lambda self: calls.append("refresh")})()
+
+    native.install_lifecycle(app)
+    calls[0][1](None)
+
+    assert calls[0][0] == "wake"
+    assert calls[1] == "refresh"
+    assert native._wake_observer is observer
