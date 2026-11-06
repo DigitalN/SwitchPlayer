@@ -8,8 +8,10 @@ Used for game names and art: the eShop title list lookup and the Nintendo-CDN-on
 download in "Application Files/titledb.py", from
 Packages/NXPlayKit/Sources/NXPlayKit/Model/Artwork.swift.
 
-The Python dependency list in "Application Files/nxnative-python/pyproject.toml" is adapted
-from NX Play's pyproject.toml.
+The Python dependency list in "Application Files/nxnative-python/pyproject.toml" and the
+Homebrew dependency list in "Application Files/Brewfile" are adapted from NX Play's
+pyproject.toml and Brewfile. The prerequisite checks in "Application Files/prerequisites.py"
+are adapted from NX Play's bin/setup.
 
 MIT License
 

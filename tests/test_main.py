@@ -492,7 +492,7 @@ def test_run_wires_the_real_page_to_a_private_pywebview_window(tmp_path):
     menu = webview.kwargs["menu"][0]
     assert menu.title == "__app__"
     assert [item.title for item in menu.items] == [
-        "Choose Library Folder…", "Choose Keys File…", "Check for nxnative Changes Now",
+        "Choose Library Folder…", "Choose Keys File…", "Build Setup…", "Check for nxnative Changes Now",
     ]
 
 
@@ -739,3 +739,42 @@ def test_wake_observation_uses_the_native_notification_center(monkeypatch):
     assert calls[0][0] == "wake"
     assert calls[1] == "refresh"
     assert native._wake_observer is observer
+
+
+def test_setup_is_read_only_until_the_player_installs_tools(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main.prerequisites, "check", lambda environment: {
+        "ready": False,
+        "items": [{"id": "tools", "name": "Build tools", "ready": False,
+                   "detail": "Homebrew tools are missing.", "action": "install"}],
+    })
+    monkeypatch.setattr(main.prerequisites, "install_tools", lambda: calls.append("install"))
+    api = main.Api(main.SwitchPlayerApp(data_dir=tmp_path, first_launch=dict))
+
+    result = api.setup()
+    assert result["ready"] is False
+    assert calls == []
+
+    assert api.install_tools() is True
+    assert calls == ["install"]
+
+
+def test_setup_menu_opens_the_dialog_and_install_failures_are_reported(tmp_path, monkeypatch):
+    class Window:
+        def __init__(self):
+            self.scripts = []
+
+        def evaluate_js(self, script):
+            self.scripts.append(script)
+
+    app = main.SwitchPlayerApp(data_dir=tmp_path, first_launch=dict)
+    window = Window()
+    app.attach_window(window)
+    app.show_setup()
+    assert window.scripts == ["showSetup()"]
+
+    def fail():
+        raise nxnative.NxnativeError("Homebrew failed")
+
+    monkeypatch.setattr(main.prerequisites, "install_tools", fail)
+    assert main.Api(app).install_tools() is False

@@ -125,6 +125,17 @@
       }
     },
     set_build_options: (id, text) => { game(id).options = text; },
+    setup: () => ({
+      ready: false,
+      items: [
+        { id: 'mac', name: 'Apple silicon and macOS', ready: true, detail: '26.6', action: null },
+        { id: 'xcode', name: 'Xcode', ready: true, detail: 'Xcode is selected and its first launch is complete.', action: null },
+        { id: 'metal', name: 'Metal Toolchain', ready: false, detail: 'In Terminal, run: xcodebuild -downloadComponent MetalToolchain', action: null },
+        { id: 'tools', name: 'Build tools', ready: false, detail: 'Homebrew tools are missing.', action: 'install' },
+        { id: 'python', name: 'Python packages', ready: false, detail: "Switch Player will install its own Python packages before the first Build.", action: null },
+      ],
+    }),
+    install_tools: () => { console.log('Preview: would install the Brewfile tools'); return true; },
     log_error: message => console.error('Page error:', message),
   };
 

@@ -35,7 +35,7 @@ A Mac app that builds and plays the maintainer's own Switch games through nxnati
 - Switch Player keeps its own clone of `seedds/nxnative` in its Application Support folder. It never touches `~/nxnative` or the clones in `~/dev`. A setting can point it at another checkout, which Switch Player then never changes.
 - Engine update: it fetches when it opens, once a day after a wake, and on Check Now (for the warnings), and moves its copy to upstream's latest only when a Build starts. Its own clone has no local commits, so it can always follow upstream, force pushes included.
 - Builds use whichever Xcode macOS has selected. Switch Player never names an Xcode version; nxnative's own error says when another is needed, and Switch Player shows it.
-- First launch checks every prerequisite: Python packages go into Switch Player's own environment (uv), Homebrew packages install with a button, Xcode stays manual.
+- At every launch, a dismissible check reports every prerequisite; Build Setup… reopens it. Nothing installs until the player asks: Homebrew packages install with a button, then Switch Player's own Python environment (uv) is prepared before the first Build. Xcode and its Metal Toolchain stay manual.
 
 ## App updates
 
