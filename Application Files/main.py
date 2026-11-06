@@ -102,6 +102,10 @@ class Native:
             applicationShouldTerminate_,
             objc.selector(reopen, selector=b"applicationShouldHandleReopen:hasVisibleWindows:", signature=b"Z@:@Z"),
         ])
+        center = AppKit.NSWorkspace.sharedWorkspace().notificationCenter()
+        self._wake_observer = center.addObserverForName_object_queue_usingBlock_(
+            AppKit.NSWorkspaceDidWakeNotification, None, None, lambda notification: app._refresh_freshness(),
+        )
 
     def convert_icon(self, source, output):
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +136,10 @@ class SwitchPlayerApp:
         self._title_pending = set()
         self._title_thread = None
         self._title_lock = threading.Lock()
+        self._freshness = {}
+        self._freshness_lock = threading.Lock()
+        self._freshness_thread = None
+        self._freshness_checked = None
         self._window = None
         self._caffeinate = None
 
@@ -153,6 +161,11 @@ class SwitchPlayerApp:
     def _build_finished(self, job, ok):
         self._last_scan = None
         if ok:
+            game = self._games.get(job.game_id)
+            with self._freshness_lock:
+                if game:
+                    self._freshness.pop(game.title_id, None)
+                self._freshness_checked = None
             self._dispatch(self._native.notify, job.name, "Build finished")
         elif job.state == "failed":
             self._dispatch(self._native.notify, job.name, "Build failed")
@@ -205,6 +218,7 @@ class SwitchPlayerApp:
         menus = [webview.Menu("__app__", [
             webview.menu.MenuAction("Choose Library Folder…", self.choose_library),
             webview.menu.MenuAction("Choose Keys File…", self.choose_keys),
+            webview.menu.MenuAction("Check for nxnative Changes Now", lambda: self._refresh_freshness(force=True)),
         ])]
         window = webview.create_window(
             APP_NAME, html=(Path(__file__).resolve().parent / "index.html").read_text(encoding="utf-8"),
@@ -243,11 +257,15 @@ class SwitchPlayerApp:
             self._scan_folder = folder
             self._last_scan = now
             self._update_titles(games)
+            self._refresh_freshness()
         games = sorted(self._games.values(),
                        key=lambda game: library.sort_key(game.name(self._titledb.name(game.title_id))))
         result = []
+        with self._freshness_lock:
+            freshness = dict(self._freshness)
         for game in games:
             status = self._builder.status(game.id) if self._builder else None
+            current = freshness.get(game.title_id, {})
             result.append({
                 "id": game.id,
                 "name": game.name(self._titledb.name(game.title_id)),
@@ -257,13 +275,32 @@ class SwitchPlayerApp:
                 "app": bool(game.app),
                 "progress": status["progress"] if status else None,
                 "error": status["error"] if status else None,
-                "out_of_date": False,
-                "newer": 0,
+                "out_of_date": current.get("out_of_date", False) or nxnative.game_files_changed(game),
+                "newer": current.get("newer", 0),
                 "log": self._game_log(game).exists(),
                 "nxplay_save": game.nxplay_save,
                 "options": values["build_options"].get(game.id, ""),
             })
         return {"folder_name": Path(folder).name, "games": result}
+
+    def _refresh_freshness(self, force=False):
+        with self._freshness_lock:
+            if self._freshness_thread and self._freshness_thread.is_alive():
+                return
+            if not force and self._freshness_checked and time.time() - self._freshness_checked < 86400:
+                return
+            self._freshness_checked = time.time()
+            self._freshness_thread = threading.Thread(target=self._fetch_freshness, name="freshness", daemon=True)
+            self._freshness_thread.start()
+
+    def _fetch_freshness(self):
+        values = self._settings.get()
+        copy = nxnative.Copy(values["nxnative_checkout"] or self._data_dir / "nxnative",
+                             own=values["nxnative_checkout"] is None)
+        apps = [game.app for game in self._games.values() if game.app]
+        freshness = copy.freshness(apps)
+        with self._freshness_lock:
+            self._freshness = freshness
 
     def _update_titles(self, games):
         missing = [game.title_id for game in games

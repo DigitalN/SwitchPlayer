@@ -118,6 +118,50 @@ class Copy:
             git(self.path, "remote", "set-head", "origin", "--auto", timeout=120)
             return git(self.path, "rev-parse", "--verify", "refs/remotes/origin/HEAD", timeout=30)
 
+    def freshness(self, apps):
+        """Fetched changes since each Game app's Build, without moving this checkout."""
+        result = {app.title_id: {"out_of_date": False, "newer": 0} for app in apps if app}
+        if not result:
+            return result
+        try:
+            if self.own:
+                self.fetch()
+            target = self._upstream_head() if self.own else "HEAD"
+            for app in apps:
+                if not app or not app.commit:
+                    continue
+                if app.commit.endswith("+dirty"):
+                    result[app.title_id]["out_of_date"] = True
+                    continue
+                base = git(self.path, "rev-parse", "--verify", "--quiet", f"{app.commit}^{{commit}}", timeout=30)
+                newer = int(git(self.path, "rev-list", "--count", f"{base}..{target}", timeout=60))
+                changed = bool(git(self.path, "log", "--format=%H", "-1", f"{base}..{target}", "--",
+                                   f"dm/games/{app.title_id}", timeout=60))
+                try:
+                    chain = git(self.path, "show", f"{target}:dm/gfx/nvn/dmsh_chain.h", timeout=30)
+                except NxnativeError:
+                    chain = ""
+                current_chain = next((line.split('"')[1] for line in chain.splitlines()
+                                      if line.startswith('#define DMSH_CHAIN "')), None)
+                out_of_date = changed or (current_chain is not None and current_chain != app.chain)
+                result[app.title_id] = {"out_of_date": out_of_date, "newer": newer}
+        except (NxnativeError, ValueError):
+            log.info("Couldn't check nxnative freshness", exc_info=True)
+        return result
+
+
+def game_files_changed(game):
+    """A Game folder gained a base game, update or DLC after its Game app was built."""
+    if not game.app:
+        return False
+    try:
+        built = (game.app.path / "Contents" / "Info.plist").stat().st_mtime
+        paths = [game.path] if game.path.suffix.lower() == ".nup" else list(game.path.iterdir())
+        return any(path.suffix.lower() in (".nsp", ".nsz", ".xci", ".xcz", ".nup")
+                   and path.stat().st_mtime > built for path in paths)
+    except OSError:
+        return False
+
 
 def find_uv():
     for folder in TOOL_PATHS:
