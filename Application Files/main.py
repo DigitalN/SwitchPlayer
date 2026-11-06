@@ -9,12 +9,14 @@ import time
 from pathlib import Path
 
 import builds
+import launch
 import library
 import migration
 import nxnative
 import prerequisites
 import settings
 import titledb
+import updater
 
 log = logging.getLogger("switchplayer")
 
@@ -143,6 +145,16 @@ class SwitchPlayerApp:
         self._freshness_checked = None
         self._window = None
         self._caffeinate = None
+        self._updater = updater.Updater(launch.bundle_path(), VERSION, self._data_dir,
+                                        is_busy=lambda: bool(self._builder and self._builder.busy),
+                                        on_status=self._update_status, quit_app=self._quit_for_update)
+
+    def _update_status(self, status, version):
+        log.info("Update status: %s%s", status, f" {version}" if version else "")
+
+    def _quit_for_update(self):
+        import AppKit
+        AppKit.NSApp.terminate_(None)
 
     def _default_save_root(self):
         if os.environ.get("SWITCHPLAYER_DATA_DIR"):
@@ -224,6 +236,7 @@ class SwitchPlayerApp:
             webview.menu.MenuAction("Choose Library Folder…", self.choose_library),
             webview.menu.MenuAction("Choose Keys File…", self.choose_keys),
             webview.menu.MenuAction("Build Setup…", self.show_setup),
+            webview.menu.MenuAction("Check for Updates…", self._updater.check_now),
             webview.menu.MenuAction("Check for nxnative Changes Now", lambda: self._refresh_freshness(force=True)),
         ])]
         window = webview.create_window(
@@ -232,6 +245,7 @@ class SwitchPlayerApp:
         )
         self.attach_window(window)
         window.events.closing += self.close_window
+        self._updater.start()
         webview.start(private_mode=True, debug=False, menu=menus)
 
     def _prepare(self, job):
