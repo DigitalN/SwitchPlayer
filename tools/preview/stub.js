@@ -4,7 +4,7 @@
 // second standing for a minute.
 //
 // Query options, combined with commas: ?s=building,dark
-//   library: (default: as it is now, nothing built yet) building ready failed noart many empty
+//   library: (default: as it is now, nothing built yet) building ready failed noart many empty nofolder
 //   theme:   dark light
 // Change window.__state while it runs to try anything else; the next poll picks it up.
 // window.__state.calls is every API call the page made. Page errors that the app would log
@@ -93,6 +93,7 @@
       }
     },
     empty: () => { state.games = []; },
+    nofolder: () => { state.folder_name = null; state.games = []; },
     dark: () => { document.documentElement.dataset.theme = 'dark'; },
     light: () => { document.documentElement.dataset.theme = 'light'; },
   };
@@ -104,6 +105,7 @@
       games: state.games.map(g => ({ ...g, progress: g.progress && (({ secs, done, uncounted, ...p }) => p)(g.progress) })),
     }),
     art: id => state.art[id] || null,
+    choose_library: () => { state.folder_name = app.library.name; state.games = app.games.map(fresh); },
     play: id => console.log(`Preview: would open ${game(id).name}.app with --no-launcher`),
     open_settings: id => console.log(`Preview: would open ${game(id).name}.app with its Settings window`),
     build: id => {
