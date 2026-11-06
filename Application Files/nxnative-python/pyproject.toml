@@ -1,8 +1,8 @@
-# The Python packages nxnative's build scripts import, installed into NX Player's own environment
+# The Python packages nxnative's build scripts import, installed into Switch Player's own environment
 # (nxnative.py, with uv). NX Play's list (varyform/nx-native-wrapper, MIT; see THIRD-PARTY-NOTICES),
 # until nxnative lists its own: the third pull request in docs/DESIGN.md.
 [project]
-name = "nxplayer-nxnative-python"
+name = "switchplayer-nxnative-python"
 version = "1"
 requires-python = ">=3.12"
 dependencies = [

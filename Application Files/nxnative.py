@@ -1,12 +1,12 @@
-"""The nxnative copy NX Player builds with, the Python environment its build script runs in,
+"""The nxnative copy Switch Player builds with, the Python environment its build script runs in,
 and the command line of a Build.
 
-NX Player's own copy is a clone of upstream nxnative in its data folder. It has no local
+Switch Player's own copy is a clone of upstream nxnative in its data folder. It has no local
 commits, so an Engine update can always move it to upstream's latest, force pushes included.
-That happens only when a Build starts. The player can point NX Player at another checkout
-instead, which NX Player then never changes.
+That happens only when a Build starts. The player can point Switch Player at another checkout
+instead, which Switch Player then never changes.
 
-The build script and the shell tools it runs call a bare `python3`, so NX Player's Python
+The build script and the shell tools it runs call a bare `python3`, so Switch Player's Python
 environment goes first on PATH. A GUI app doesn't get the shell's PATH, so Homebrew's and
 the .NET SDK's folders are added too. The environment's packages are NX Play's list
 (nxnative-python/pyproject.toml) until nxnative lists its own (the third pull request in
@@ -24,13 +24,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
-log = logging.getLogger("nxplayer")
+log = logging.getLogger("switchplayer")
 
 UPSTREAM = "https://github.com/seedds/nxnative.git"
 BUILD_SCRIPT = "scripts/build_ipa_from_nsp.py"
 TOOL_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/local/share/dotnet"]
 SYSTEM_PATHS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-# Not passed on to the build: they'd point its Python at NX Player's own (bundled) one.
+# Not passed on to the build: they'd point its Python at Switch Player's own (bundled) one.
 DROPPED_ENV = ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONEXECUTABLE", "VIRTUAL_ENV", "__PYVENV_LAUNCHER__")
 
 
@@ -56,7 +56,7 @@ def git(repo, *args, timeout=600):
 
 
 class Copy:
-    """An nxnative checkout: NX Player's own clone (`own`), or the player's, left as it is."""
+    """An nxnative checkout: Switch Player's own clone (`own`), or the player's, left as it is."""
 
     def __init__(self, path, own, upstream=UPSTREAM):
         self.path = Path(path)
@@ -77,7 +77,7 @@ class Copy:
             return None
 
     def ensure(self):
-        """Clones NX Player's own copy if it isn't there yet."""
+        """Clones Switch Player's own copy if it isn't there yet."""
         if self.ready():
             return
         if not self.own:
@@ -94,12 +94,12 @@ class Copy:
         os.replace(part, self.path)
 
     def fetch(self):
-        """Fetches upstream's latest without moving the copy to it (NX Player's own copy only)."""
+        """Fetches upstream's latest without moving the copy to it (Switch Player's own copy only)."""
         if self.own and self.ready():
             git(self.path, "fetch", "--quiet", "--prune", "origin", timeout=300)
 
     def update(self):
-        """The Engine update, as a Build starts: NX Player's own copy moves to upstream's latest.
+        """The Engine update, as a Build starts: Switch Player's own copy moves to upstream's latest.
         Returns the commit the Build will use."""
         self.ensure()
         if self.own:
@@ -128,7 +128,7 @@ def find_uv():
 
 
 class Environment:
-    """NX Player's own Python for nxnative, with the packages its build script imports: in
+    """Switch Player's own Python for nxnative, with the packages its build script imports: in
     `folder`, Python and uv's cache included (not whichever Python the Mac happens to have)."""
 
     def __init__(self, folder, project_source):
@@ -152,7 +152,7 @@ class Environment:
             return
         uv = find_uv()
         if uv is None:
-            raise NxnativeError("NX Player needs uv to install nxnative's Python packages: brew install uv")
+            raise NxnativeError("Switch Player needs uv to install nxnative's Python packages: brew install uv")
         log.info("Installing nxnative's Python packages into %s", self.venv)
         self.project.mkdir(parents=True, exist_ok=True)
         (self.folder / "synced-pyproject.toml").unlink(missing_ok=True)
@@ -168,7 +168,7 @@ class Environment:
 
 def _base_env():
     env = {k: v for k, v in os.environ.items()
-           if k not in DROPPED_ENV and not k.startswith(("DYLD_", "_PYI", "_MEIPASS"))}
+           if k not in DROPPED_ENV and not k.startswith(("PYTHON", "DYLD_", "_PYI", "_MEIPASS"))}
     env["PATH"] = os.pathsep.join(TOOL_PATHS + SYSTEM_PATHS)
     return env
 

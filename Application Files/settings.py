@@ -1,4 +1,4 @@
-"""NX Player's own settings, stored as JSON in its data folder.
+"""Switch Player's own settings, stored as JSON in its data folder.
 
 Every value is validated on load and on save, so a stale or hand-edited file can't put the
 app into a bad state. The first launch fills in the Library folder and keys file from NX
@@ -11,14 +11,14 @@ import os
 import threading
 from pathlib import Path
 
-log = logging.getLogger("nxplayer")
+log = logging.getLogger("switchplayer")
 
 NXPLAY_DOMAIN = "com.varyform.nxplay"
 
 DEFAULTS = {
     "library_folder": None,  # the folder holding the Game folders
     "keys_file": None,  # prod.keys, for Game folders of .nsp and .xci files
-    "nxnative_checkout": None,  # another nxnative checkout to build with, which NX Player never changes
+    "nxnative_checkout": None,  # another nxnative checkout to build with, which Switch Player never changes
     "build_options": {},  # {game id: options as typed}, only for games that have some
 }
 

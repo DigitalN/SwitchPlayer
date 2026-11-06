@@ -140,13 +140,13 @@ def test_what_prepare_finds_missing_is_the_error(tmp_path):
     folder = game(tmp_path, "Echoes")
 
     def prepare(job):
-        raise NxnativeError("NX Player needs uv to install nxnative's Python packages: brew install uv")
+        raise NxnativeError("Switch Player needs uv to install nxnative's Python packages: brew install uv")
 
     h = Harness(tmp_path, prepare)
     h.builder.build("Echoes", folder, "Echoes")
     h.wait(1)
     assert h.builder.status("Echoes") == {
-        "state": "failed", "progress": None, "error": "NX Player needs uv to install nxnative's Python packages: brew install uv",
+        "state": "failed", "progress": None, "error": "Switch Player needs uv to install nxnative's Python packages: brew install uv",
         "log": str(tmp_path / "Logs" / "Echoes.log")}
 
 

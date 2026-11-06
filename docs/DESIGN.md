@@ -1,10 +1,10 @@
-# NX Player design
+# Switch Player design
 
-Agreed with the maintainer on 2026-11-03, before any code. Terms are in [GLOSSARY.md](../GLOSSARY.md); the rule every choice here follows is [ADR 0001](adr/0001-only-the-documented-contract.md): nxnative stays the easiest thing to update, and NX Player relies only on what nxnative documents for front ends ([nxnative's docs/frontends.md](https://github.com/seedds/nxnative/blob/main/docs/frontends.md)). When a request competes with that, discuss it before building it.
+Agreed with the maintainer on 2026-11-03, before any code. Terms are in [GLOSSARY.md](../GLOSSARY.md); the rule every choice here follows is [ADR 0001](adr/0001-only-the-documented-contract.md): nxnative stays the easiest thing to update, and Switch Player relies only on what nxnative documents for front ends ([nxnative's docs/frontends.md](https://github.com/seedds/nxnative/blob/main/docs/frontends.md)). When a request competes with that, discuss it before building it.
 
 ## What it is
 
-A Mac app that builds and plays the maintainer's own Switch games through nxnative, with no Terminal. Python + pywebview + vanilla JS, packed with PyInstaller (the stack of Mac Engine Room, `~/Documents/GitHub/pythonflow`). Bundle identifier `com.digitaln.nxplayer` (never changes after the first release). Mac only: no IPAs. Apple silicon, macOS 26.6 or later, as nxnative needs.
+A Mac app that builds and plays the maintainer's own Switch games through nxnative, with no Terminal. Python + pywebview + vanilla JS, packed with PyInstaller (the stack of Mac Engine Room, `~/Documents/GitHub/pythonflow`). Bundle identifier `com.digitaln.switchplayer` (never changes after the first release). Mac only: no IPAs. Apple silicon, macOS 26.6 or later, as nxnative needs.
 
 ## Library
 
@@ -21,47 +21,47 @@ A Mac app that builds and plays the maintainer's own Switch games through nxnati
 - The Game app goes in its Game folder (nxnative's default; its big files are APFS clones there). Build folders (`<title ID>_build`, 3–19 GB) stay, so rebuilds take minutes.
 - Idle sleep is held off while a Build runs or waits; the display may sleep.
 - A notification when a Build finishes or fails.
-- Closing the window keeps building (NX Player stays in the Dock); Quit asks "Stop the Build and quit?".
+- Closing the window keeps building (Switch Player stays in the Dock); Quit asks "Stop the Build and quit?".
 - **Build options**: read from the build script once nxnative can list them for a program (pull request below); until then a text field per game, passed to the script as typed. Nothing set by default.
 
 ## Playing
 
 - Play starts the Game app straight into the game with its saved Game settings (skips its Settings window).
-- **Settings…** opens the Game app with its own Settings window: Play there saves the choices, Quit throws them away. NX Player never draws Game settings.
+- **Settings…** opens the Game app with its own Settings window: Play there saves the choices, Quit throws them away. Switch Player never draws Game settings.
 - **Out of date** (yellow: "Your version is out of date, consider rebuilding"): nxnative changed something for this game specifically (its own files in nxnative, or the shader version) since the Game app was built, or the Game folder gained files since. Other newer nxnative changes show only as a grey count ("142 newer nxnative changes"). Play stays available either way.
 
 ## nxnative
 
-- NX Player keeps its own clone of `seedds/nxnative` in its Application Support folder. It never touches `~/nxnative` or the clones in `~/dev`. A setting can point it at another checkout, which NX Player then never changes.
+- Switch Player keeps its own clone of `seedds/nxnative` in its Application Support folder. It never touches `~/nxnative` or the clones in `~/dev`. A setting can point it at another checkout, which Switch Player then never changes.
 - Engine update: it fetches when it opens, once a day after a wake, and on Check Now (for the warnings), and moves its copy to upstream's latest only when a Build starts. Its own clone has no local commits, so it can always follow upstream, force pushes included.
-- Builds use whichever Xcode macOS has selected. NX Player never names an Xcode version; nxnative's own error says when another is needed, and NX Player shows it.
-- First launch checks every prerequisite: Python packages go into NX Player's own environment (uv), Homebrew packages install with a button, Xcode stays manual.
+- Builds use whichever Xcode macOS has selected. Switch Player never names an Xcode version; nxnative's own error says when another is needed, and Switch Player shows it.
+- First launch checks every prerequisite: Python packages go into Switch Player's own environment (uv), Homebrew packages install with a button, Xcode stays manual.
 
 ## App updates
 
-Mac Engine Room's updater (`Application Files/updater.py` and the helpers it imports from `launch.py`; *How updates work* and *Testing the updater* in its `docs/DEVELOPMENT.md`): GitHub releases of the public `DigitalN/NXPlayer` repo, a `.dmg` signed with the maintainer's Apple Development certificate (team `XT4LT7MS6Y`), checked once a day after a wake. Its busy hook holds the relaunch while a Build runs or waits.
+Mac Engine Room's updater (`Application Files/updater.py` and the helpers it imports from `launch.py`; *How updates work* and *Testing the updater* in its `docs/DEVELOPMENT.md`): GitHub releases of the public `DigitalN/SwitchPlayer` repo, a `.dmg` signed with the maintainer's Apple Development certificate (team `XT4LT7MS6Y`), checked once a day after a wake. Its busy hook holds the relaunch while a Build runs or waits.
 
 ## Moving off NX Play
 
 - First launch fills in NX Play's Library folder and keys file (below).
 - At each game's first Build, if the Game app has no save yet: copy NX Play's save (`<title ID>_build/run/save`) to the Game app's (`~/Library/Application Support/nxnative/<title ID>/save`), leaving the original; and write NX Play's every-game settings as that game's saved choices.
 - Import NX Play Save… does the copy on demand: shows both saves' dates, asks, first moves the current save to `save-backups/<date> before NX Play import` beside it, and refuses while the game runs.
-- The maintainer deletes NX Play once each game has been played in NX Player.
+- The maintainer deletes NX Play once each game has been played in Switch Player.
 
 ## Pull requests to nxnative
 
-NX Player works without each; each removes something NX Player would otherwise keep in step with nxnative.
+Switch Player works without each; each removes something Switch Player would otherwise keep in step with nxnative.
 
 1. A switch that shows a Game app's Settings window for one start even when its "Show this window at launch" is off (`Launcher.swift` checks only the `window.show` default and the Option key). Until then, Settings… needs that window left on.
 2. The build script's options in a form a program can read (e.g. `--options json`). Until then, the text field.
 3. nxnative's dependencies as files (Python version, Python packages, Homebrew packages), installed from the nxnative copy after every Engine update. Until then, NX Play's list.
-4. `docs/frontends.md` documents what tells a Game app is out of date: `DMCommit` in its Info.plist, `dm/games/<title ID>/`, and the shader version (`DMSH_CHAIN` in `dm/gfx/nvn/dmsh_chain.h`, `DMChain` in the app). Until then NX Player reads them under ADR 0001's exception, and shows only the grey count when any is missing.
+4. `docs/frontends.md` documents what tells a Game app is out of date: `DMCommit` in its Info.plist, `dm/games/<title ID>/`, and the shader version (`DMSH_CHAIN` in `dm/gfx/nvn/dmsh_chain.h`, `DMChain` in the app). Until then Switch Player reads them under ADR 0001's exception, and shows only the grey count when any is missing.
 
 ## Facts the build depends on
 
 From nxnative at `8c80f39` (2026-11-03).
 
-**Building.** `python3 scripts/build_ipa_from_nsp.py <Game folder or .nup> --platform mac-app --progress json [-k <prod.keys>]`, run from the nxnative copy with NX Player's Python environment first on `PATH` (nxnative's shell tools call a bare `python3`). A GUI app doesn't get the shell's `PATH`: add `/opt/homebrew/bin` and `/usr/local/share/dotnet`. Keys aren't needed for a `.nup` or a dump folder.
+**Building.** `python3 scripts/build_ipa_from_nsp.py <Game folder or .nup> --platform mac-app --progress json [-k <prod.keys>]`, run from the nxnative copy with Switch Player's Python environment first on `PATH` (nxnative's shell tools call a bare `python3`). A GUI app doesn't get the shell's `PATH`: add `/opt/homebrew/bin` and `/usr/local/share/dotnet`. Keys aren't needed for a `.nup` or a dump folder.
 - stdout: one JSON object per line, each with `ev` and `t`: `stage` (`k`, `n`, `name`, `step`; `n` can grow), `step`, `progress` (`done`, `total`, `unit`, `frac` 0–0.99 or null, `eta`, `elapsed`, `note`), `stage_end` (`ok`, `summary`, `elapsed`), `shaders_stale`, `say` (`msg`; starting `[RED] ` is an error).
 - Exit 0 done, 1 error (the last `say` says why; a traceback on stderr if unexpected), 2 bad arguments (usage on stderr, no JSON), 130 interrupted. Capture stderr too.
 - Tools' full output: `<Game folder>/<title ID>_build/logs/`.
@@ -85,6 +85,6 @@ From nxnative at `8c80f39` (2026-11-03).
 
 ## Before building on the maintainer's Mac
 
-- Saves, saved choices and logs live under nxnative's own folders and preferences, not NX Player's, so a test Build, Play or import touches the real ones. Test against a copy of a Game folder and with a data-folder override, as Mac Engine Room does with `PYTHONFLOW_DATA_DIR`, and say so before anything opens on screen.
+- Saves, saved choices and logs live under nxnative's own folders and preferences, not Switch Player's, so a test Build, Play or import touches the real ones. Test against a copy of a Game folder and with a data-folder override, as Mac Engine Room does with `PYTHONFLOW_DATA_DIR`, and say so before anything opens on screen.
 - Don't touch `~/nxnative`, the `~/dev/nxnative*` clones, NX Play or its build folders' `run/save` beyond reading.
 - Check the grid in a page preview with the three games before building more on it.
