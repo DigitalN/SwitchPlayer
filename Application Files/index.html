@@ -162,6 +162,12 @@ dialog {
 dialog::backdrop { background: var(--backdrop); }
 dialog h3 { margin: 0 0 6px; font-size: 14px; }
 dialog p { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.setup-list { margin: 14px 0; padding: 0; list-style: none; }
+.setup-list li { padding: 10px 0; border-top: 1px solid var(--line); }
+.setup-list li:first-child { border-top: 0; }
+.setup-list b { display: block; font-size: 13px; }
+.setup-list span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; user-select: text; -webkit-user-select: text; }
+.setup-list .pending { color: var(--warn); }
 dialog input {
   width: 100%; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px;
   background: var(--bg); color: var(--text); font: 12px ui-monospace, "SF Mono", Menlo, monospace;
@@ -191,6 +197,14 @@ dialog input:focus { outline: 3px solid color-mix(in srgb, var(--accent) 45%, tr
   <p>Passed to nxnative's build script as typed, at this game's next Build. Leave it empty for nxnative's defaults.</p>
   <input id="options-input" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
   <div class="actions"><button class="btn" id="options-cancel">Cancel</button><button class="btn primary" id="options-save">Save</button></div>
+</dialog>
+
+<dialog id="setup">
+  <h3>Get ready to Build</h3>
+  <p>Switch Player checks what nxnative needs. Xcode and its Metal Toolchain stay manual; nothing is installed until you ask.</p>
+  <ul class="setup-list" id="setup-list"></ul>
+  <p id="setup-error" hidden></p>
+  <div class="actions"><button class="btn" id="setup-close">Not Now</button><button class="btn" id="setup-recheck">Check Again</button><button class="btn primary" id="setup-install" hidden>Install Build Tools</button></div>
 </dialog>
 
 <script>
@@ -488,12 +502,53 @@ $('options-save').addEventListener('click', saveOptions);
 $('options-cancel').addEventListener('click', () => $('options').close());
 $('options-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveOptions(); } });
 
+// ── first-launch setup ──────────────────────────────────
+let setupSeen = false, setupBusy = false;
+async function showSetup() {
+  if (setupBusy) return;
+  setupBusy = true;
+  $('setup-error').hidden = true;
+  $('setup-recheck').disabled = true;
+  try {
+    const result = await api().setup();
+    $('setup-list').innerHTML = (result.items || []).map(item => `
+      <li><b>${item.ready ? '✓' : '○'} ${esc(item.name)}</b><span class="${item.ready ? '' : 'pending'}">${esc(item.detail)}</span></li>`).join('');
+    $('setup-install').hidden = !(result.items || []).some(item => item.action === 'install');
+    $('setup-close').textContent = result.ready ? 'Done' : 'Not Now';
+    if (!$('setup').open) $('setup').showModal();
+  } catch (e) { reportError(`setup: ${e.message || e}`); }
+  setupBusy = false;
+  $('setup-recheck').disabled = false;
+}
+$('setup-close').addEventListener('click', () => $('setup').close());
+$('setup-recheck').addEventListener('click', showSetup);
+$('setup-install').addEventListener('click', async () => {
+  if (setupBusy) return;
+  setupBusy = true;
+  $('setup-recheck').disabled = true;
+  $('setup-install').disabled = true;
+  $('setup-install').textContent = 'Installing…';
+  const ok = await call('install_tools');
+  setupBusy = false;
+  $('setup-recheck').disabled = false;
+  $('setup-install').disabled = false;
+  $('setup-install').textContent = 'Install Build Tools';
+  if (!ok) {
+    $('setup-error').textContent = 'Homebrew could not install the tools. See the app log, then try again.';
+    $('setup-error').hidden = false;
+  }
+  showSetup();
+});
+
 // ── boot ────────────────────────────────────────────────
 const reportError = msg => { try { api().log_error(msg); } catch (_) { /* bridge not ready */ } };
 window.addEventListener('error', e => reportError(`${e.message} (line ${e.lineno})`));
 window.addEventListener('unhandledrejection', e => reportError(`Unhandled: ${e.reason?.message || e.reason}`));
 
-window.addEventListener('pywebviewready', () => poll());
+window.addEventListener('pywebviewready', () => {
+  poll();
+  if (!setupSeen) { setupSeen = true; showSetup(); }
+});
 </script>
 </body>
 </html>

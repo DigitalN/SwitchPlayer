@@ -12,6 +12,7 @@ import builds
 import library
 import migration
 import nxnative
+import prerequisites
 import settings
 import titledb
 
@@ -211,6 +212,10 @@ class SwitchPlayerApp:
         if paths:
             self._settings.update({"keys_file": paths[0]})
 
+    def show_setup(self):
+        if self._window:
+            self._window.evaluate_js("showSetup()")
+
     def run(self, webview=None):
         if webview is None:
             import webview
@@ -218,6 +223,7 @@ class SwitchPlayerApp:
         menus = [webview.Menu("__app__", [
             webview.menu.MenuAction("Choose Library Folder…", self.choose_library),
             webview.menu.MenuAction("Choose Keys File…", self.choose_keys),
+            webview.menu.MenuAction("Build Setup…", self.show_setup),
             webview.menu.MenuAction("Check for nxnative Changes Now", lambda: self._refresh_freshness(force=True)),
         ])]
         window = webview.create_window(
@@ -463,6 +469,17 @@ class Api:
 
     def import_nxplay_save(self, game_id):
         return self._app._import_nxplay_save(game_id)
+
+    def setup(self):
+        return prerequisites.check(self._app._data_dir / "nxnative-python")
+
+    def install_tools(self):
+        try:
+            prerequisites.install_tools()
+            return True
+        except nxnative.NxnativeError as e:
+            log.warning("Build tool installation: %s", e)
+            return False
 
     def log_error(self, message):
         log.warning("Page error: %s", str(message)[:1000])

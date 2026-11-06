@@ -1,0 +1,5 @@
+brew "uv"
+brew "xcodegen"
+brew "zstd"
+brew "glslang"
+cask "dotnet-sdk"
