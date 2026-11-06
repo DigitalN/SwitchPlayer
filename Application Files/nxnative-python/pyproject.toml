@@ -1,0 +1,18 @@
+# The Python packages nxnative's build scripts import, installed into NX Player's own environment
+# (nxnative.py, with uv). NX Play's list (varyform/nx-native-wrapper, MIT; see THIRD-PARTY-NOTICES),
+# until nxnative lists its own: the third pull request in docs/DESIGN.md.
+[project]
+name = "nxplayer-nxnative-python"
+version = "1"
+requires-python = ">=3.12"
+dependencies = [
+  "lz4",
+  "capstone>=5,<6",
+  "fonttools",
+  "backports.zstd; python_version < '3.14'",
+  "nsz",   # NSZ / XCZ (compressed) game files
+  "zbic",  # ZBIC (Nintendo's zstd) code modules, system 22.0.0 on
+]
+
+[tool.uv]
+package = false

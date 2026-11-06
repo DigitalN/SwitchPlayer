@@ -1,0 +1,5 @@
+__pycache__/
+.pytest_cache/
+.DS_Store
+# the page preview's downloaded names and art (tools/preview/serve.py)
+tools/preview/.data/
