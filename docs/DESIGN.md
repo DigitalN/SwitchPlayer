@@ -44,7 +44,7 @@ Mac Engine Room's updater (`Application Files/updater.py` and the helpers it imp
 ## Moving off NX Play
 
 - First launch fills in NX Play's Library folder and keys file (below).
-- At each game's first Build, if the Game app has no save yet: copy NX Play's save (`<title ID>_build/run/save`) to the Game app's (`~/Library/Application Support/nxnative/<title ID>/save`), leaving the original; and write NX Play's every-game settings as that game's saved choices.
+- At each game's first Build, if the Game app has no save yet: copy NX Play's save (`<title ID>_build/run/save`) to the Game app's (`~/Library/Application Support/nxnative/<title ID>/save`), leaving the original. Game settings are not migrated.
 - Import NX Play Save… does the copy on demand: shows both saves' dates, asks, first moves the current save to `save-backups/<date> before NX Play import` beside it, and refuses while the game runs.
 - The maintainer deletes NX Play once each game has been played in Switch Player.
 

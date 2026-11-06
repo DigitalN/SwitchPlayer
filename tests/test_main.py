@@ -134,8 +134,11 @@ class FakeNative:
         self.calls = []
         self.answer = True
 
-    def confirm(self, message):
-        self.calls.append(("confirm", message))
+    def game_running(self, game):
+        return False
+
+    def confirm(self, message, action="Quit"):
+        self.calls.append(("confirm", message, action))
         return self.answer
 
     def open_app(self, path, no_launcher):
@@ -195,6 +198,10 @@ def test_build_prepares_the_isolated_nxnative_script_and_environment(tmp_path, m
     folder.mkdir(parents=True)
     (folder / f"Rhythm Heaven [{tid}].nsp").touch()
     (folder / "plan.json").write_text(json.dumps({"name": "Rhythm Heaven Groove", "title_id": tid}))
+    source = folder / f"{tid}_build" / "run" / "save"
+    source.mkdir(parents=True)
+    (source / "progress").write_text("NX Play")
+    save_root = tmp_path / "nxnative-support"
     checkout = tmp_path / "player's nxnative"
     script = checkout / nxnative.BUILD_SCRIPT
     script.parent.mkdir(parents=True)
@@ -229,6 +236,7 @@ def test_build_prepares_the_isolated_nxnative_script_and_environment(tmp_path, m
         },
         native=native,
         dispatch=lambda function, *args: function(*args),
+        save_root=save_root,
     )
     api = main.Api(app)
     api.library()
@@ -250,6 +258,8 @@ def test_build_prepares_the_isolated_nxnative_script_and_environment(tmp_path, m
         "-k", str(keys), "--flag", "two words",
     ]
     assert prepared == [data / "nxnative-python"]
+    assert (save_root / tid / "save" / "progress").read_text() == "NX Play"
+    assert (source / "progress").read_text() == "NX Play"
     assert (folder / "Rhythm Heaven Groove.app" / "Contents" / "Info.plist").is_file()
     deadline = clock() + 5
     while ("allow_sleep", "sleep token") not in native.calls and clock() < deadline:
@@ -366,19 +376,18 @@ def test_window_close_reopen_and_busy_quit(tmp_path):
     assert app.application_should_terminate() is True
     assert builder.stop_all_calls == 2
     assert native.calls == [
-        ("confirm", "Stop the Build and quit?"),
-        ("confirm", "Stop the Build and quit?"),
+        ("confirm", "Stop the Build and quit?", "Quit"),
+        ("confirm", "Stop the Build and quit?", "Quit"),
     ]
 
 
-def test_page_errors_are_logged_and_save_migration_is_not_in_the_shell(tmp_path, caplog):
+def test_page_errors_are_logged(tmp_path, caplog):
     api = main.Api(main.SwitchPlayerApp(data_dir=tmp_path, first_launch=dict))
 
     with caplog.at_level("WARNING", logger="switchplayer"):
         api.log_error("page failed")
 
     assert "Page error: page failed" in caplog.text
-    assert api.import_nxplay_save("Game") is False
 
 
 def test_only_one_instance_holds_the_lock(tmp_path):
@@ -538,3 +547,90 @@ def test_native_notifications_use_the_installed_appkit_api(monkeypatch):
     assert calls[:2] == [("title", "Rhythm Heaven"), ("body", "Build finished")]
     assert calls[2][0] == "deliver"
     assert isinstance(calls[2][1], Notification)
+
+
+def test_save_import_shows_dates_backs_up_and_copies_only_after_confirmation(tmp_path):
+    tid = "0100D9F01D474000"
+    folder = tmp_path / "Switch Games" / "Rhythm Heaven"
+    source = folder / f"{tid}_build" / "run" / "save"
+    source.mkdir(parents=True)
+    (source / "progress").write_text("NX Play")
+    (folder / f"Rhythm Heaven [{tid}].nsp").touch()
+    support = tmp_path / "nxnative-support"
+    destination = support / tid / "save"
+    destination.mkdir(parents=True)
+    (destination / "current").write_text("Switch Player")
+    native = FakeNative()
+    native.answer = False
+    app = main.SwitchPlayerApp(
+        data_dir=tmp_path / "data",
+        first_launch=lambda: {"library_folder": str(folder.parent)},
+        native=native,
+        dispatch=lambda function, *args: function(*args),
+        save_root=support,
+    )
+    api = main.Api(app)
+    api.library()
+
+    assert api.import_nxplay_save("Rhythm Heaven") is False
+    assert (destination / "current").read_text() == "Switch Player"
+    assert len(native.calls) == 1
+    assert native.calls[0][0] == "confirm"
+    assert native.calls[0][2] == "Import"
+    assert "NX Play save:" in native.calls[0][1]
+    assert "Current save:" in native.calls[0][1]
+
+    native.answer = True
+    assert api.import_nxplay_save("Rhythm Heaven") is True
+    assert (destination / "progress").read_text() == "NX Play"
+    backups = list((support / tid / "save-backups").iterdir())
+    assert len(backups) == 1
+    assert backups[0].name.endswith(" before NX Play import")
+    assert (backups[0] / "current").read_text() == "Switch Player"
+
+
+def test_save_import_refuses_while_the_game_is_running(tmp_path):
+    tid = "0100D9F01D474000"
+    folder = tmp_path / "Switch Games" / "Rhythm Heaven"
+    source = folder / f"{tid}_build" / "run" / "save"
+    source.mkdir(parents=True)
+    (folder / f"Rhythm Heaven [{tid}].nsp").touch()
+    support = tmp_path / "nxnative-support"
+    native = FakeNative()
+    app = main.SwitchPlayerApp(
+        data_dir=tmp_path / "data",
+        first_launch=lambda: {"library_folder": str(folder.parent)},
+        native=native,
+        save_root=support,
+        game_running=lambda game: True,
+    )
+    api = main.Api(app)
+    api.library()
+
+    assert api.import_nxplay_save("Rhythm Heaven") is False
+    assert native.calls == []
+    assert not (support / tid / "save").exists()
+
+
+def test_save_import_does_not_offer_a_missing_source(tmp_path):
+    tid = "0100D9F01D474000"
+    folder = tmp_path / "Switch Games" / "Rhythm Heaven"
+    folder.mkdir(parents=True)
+    (folder / f"Rhythm Heaven [{tid}].nsp").touch()
+    support = tmp_path / "nxnative-support"
+    destination = support / tid / "save"
+    destination.mkdir(parents=True)
+    (destination / "current").write_text("Switch Player")
+    native = FakeNative()
+    app = main.SwitchPlayerApp(
+        data_dir=tmp_path / "data",
+        first_launch=lambda: {"library_folder": str(folder.parent)},
+        native=native,
+        save_root=support,
+    )
+    api = main.Api(app)
+    api.library()
+
+    assert api.import_nxplay_save("Rhythm Heaven") is False
+    assert native.calls == []
+    assert (destination / "current").read_text() == "Switch Player"
