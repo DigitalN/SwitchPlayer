@@ -478,6 +478,8 @@ def test_run_wires_the_real_page_to_a_private_pywebview_window(tmp_path):
     native = LaunchNative()
     app = main.SwitchPlayerApp(data_dir=tmp_path, first_launch=dict, native=native,
                                dispatch=lambda function, *args: function(*args))
+    app._updater = type("Updater", (), {"start": lambda self: native.calls.append(("updates",)),
+                                       "check_now": lambda self: native.calls.append(("check updates",))})()
 
     app.run(webview)
 
@@ -488,12 +490,15 @@ def test_run_wires_the_real_page_to_a_private_pywebview_window(tmp_path):
     assert webview.start_kwargs["debug"] is False
     assert app._window is webview.window
     assert webview.window.events.closing.handlers == [app.close_window]
-    assert native.calls == [("lifecycle", app)]
+    assert native.calls == [("lifecycle", app), ("updates",)]
     menu = webview.kwargs["menu"][0]
     assert menu.title == "__app__"
     assert [item.title for item in menu.items] == [
-        "Choose Library Folder…", "Choose Keys File…", "Build Setup…", "Check for nxnative Changes Now",
+        "Choose Library Folder…", "Choose Keys File…", "Build Setup…", "Check for Updates…",
+        "Check for nxnative Changes Now",
     ]
+    menu.items[3].action()
+    assert native.calls[-1] == ("check updates",)
 
 
 def test_page_library_choice_uses_the_native_dispatcher(tmp_path):

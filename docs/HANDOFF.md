@@ -19,9 +19,11 @@ The maintainer's rule from Mac Engine Room (`~/Documents/GitHub/pythonflow/CLAUD
 
 ## Written and tested
 
-All in `Application Files/`. `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3 -m pytest` → 99 tests pass (`tests/`).
+All in `Application Files/`. `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3 -m pytest` → 113 tests pass (`tests/`).
 
 - `main.py`: the pywebview app and public page API, wired to the modules below. Includes native Play/Settings/Finder/log actions, Build preparation, two-second scan throttling and forced post-Build scans, background titledb updates, cached app-icon conversion, Build notifications and sleep prevention, a regular Dock window whose close action hides it, busy-Quit confirmation, application-menu Library/keys pickers, logging and the single-instance lock. `SWITCHPLAYER_DATA_DIR` isolates app data, logs and save migration. `tests/test_main.py` exercises the public API and native lifecycle with simulated services and a fake nxnative script; the real native app has not been opened in this step. Freshness fetches in the background at the first Library scan, at most daily after wake, and from Check for nxnative Changes Now.
+- `updater.py`, `launch.py`: same-team signed GitHub release updates, checked once a day after wake and from Check for Updates…. Source and ad-hoc copies do not self-update. Automatic relaunch waits for a quiet Mac and an idle Build queue. Tests cover release parsing, versions, signing requirements, daily checks, the busy hook and relaunch with simulated `open`/`ps`. A real signed app was copied out of a test disk image and verified; no app was installed, replaced or launched.
+- `SwitchPlayer.spec`, `requirements.txt`, `scripts/build.sh`, `scripts/package.sh`: arm64 app bundle (`com.digitaln.switchplayer`, macOS 26.6+) with the page, Brewfile, Python package list and notices. Builds use `~/Library/Caches/SwitchPlayer-build`, clear Finder metadata and sign with the maintainer's Apple Development certificate. `scripts/build.sh` produced a valid team-`XT4LT7MS6Y` bundle. `package.sh` creates the release DMG but has not been run; it needs Finder Automation for layout. `docs/DEVELOPMENT.md` has the release checklist and isolated updater procedure. No release has been published.
 - `prerequisites.py`: read-only checks for Apple silicon with macOS 26.6+, selected Xcode and its first launch, Metal, the Brewfile tools and Switch Player's Python environment. The launch dialog also opens from Build Setup…; Not Now dismisses it. Only Install Build Tools runs Homebrew (30-minute timeout), with a failure message and Check Again. Python packages are prepared by the existing `Environment.ensure()` before the first Build, not by the read-only check. Tests simulate system commands and Homebrew; no real installation or native app launch occurred. The preview exercises setup in light, dark and a 420-pixel window, including its simulated install action.
 - `migration.py`: save-game migration only, not Game settings. Before a Build, copies an NX Play save to the Game app's save folder only if none exists, leaving the original untouched. Import NX Play Save… shows both save dates, asks with Import/Cancel, refuses while the game runs, and backs up the current save before replacing it. Missing sources, copy failures and backup-name collisions leave the current save intact. `tests/test_migration.py` and the public-API tests use temporary save folders only.
 - `titledb.py`: names and art from blawar/titledb `US.en.json` (adapted from NX Play's Artwork.swift; MIT notice in `THIRD-PARTY-NOTICES`). Streams the 90 MB list one entry at a time (53 MB peak vs 650 MB parsed whole), keeps only the library's titles in `index.json`, lowest nsuId wins (SMP Jamboree has a later Switch 2 Edition listing), images only from `https://img-eshop.cdn.nintendo.net`, checked to be JPEG, kept in `art/<title ID>.jpg`. List fetched at most once a launch; titles it lacks are retried after a week. Downloads via `/usr/bin/curl` (system certs).
@@ -35,7 +37,7 @@ All in `Application Files/`. `/Library/Frameworks/Python.framework/Versions/3.13
 1. **Moving off NX Play** (DESIGN.md): save-game migration is implemented. At a game's first Build, if `~/Library/Application Support/nxnative/<tid>/save` doesn't exist, copy `<tid>_build/run/save` there and leave the original. Import NX Play Save… shows both dates, asks with Import/Cancel, backs up the current save to `save-backups/<date> before NX Play import`, and refuses while the game runs. Game settings are deliberately not migrated. Tests inject an isolated save root; `SWITCHPLAYER_DATA_DIR` also redirects save migration for test runs.
 2. **Out of date and the grey count**: implemented as described above. The existing Ready tile and `ready` preview scenario display the warning and count; no page changes were needed.
 3. **Prerequisites**: implemented as described above, including the launch dialog, Build Setup… menu and explicit Homebrew installation.
-4. **Packaging and updates**: PyInstaller spec + `scripts/build.sh` (build in `~/Library/Caches`, `xattr -cr`, sign with team `XT4LT7MS6Y`), bundle id `com.digitaln.switchplayer`, Mac Engine Room's updater against `DigitalN/SwitchPlayer` releases, with its busy hook = `builder.busy`.
+4. **Packaging and updates**: implemented as described above. The signed bundle and real disk-image verification pass; the full DMG layout and relaunch into a test copy remain release-checklist steps, not yet performed.
 5. The four nxnative pull requests in DESIGN.md (each has a fallback, so they're independent).
 6. A `CLAUDE.md` for this repo once `main.py` exists (architecture, debugging, testing rules), like Mac Engine Room's.
 
@@ -51,6 +53,10 @@ All in `Application Files/`. `/Library/Frameworks/Python.framework/Versions/3.13
 ```
 Application Files/index.html            the page (approved)
 Application Files/main.py               app shell, public page API and native lifecycle
+Application Files/updater.py, launch.py verified release updates and relaunch (tested)
+Application Files/SwitchPlayer.spec     PyInstaller app bundle
+Application Files/requirements.txt      pinned app and packaging dependencies
+scripts/build.sh, package.sh            signed app and release DMG
 Application Files/prerequisites.py      Build prerequisite checks and explicit installation (tested)
 Application Files/Brewfile              Homebrew Build tools
 Application Files/migration.py          NX Play save migration and backups (tested)
@@ -64,5 +70,5 @@ tests/                                  conftest, test_titledb, test_library, te
 tools/preview/serve.py, stub.js         the page preview
 .claude/launch.json                     page-preview on port 8766
 THIRD-PARTY-NOTICES, .gitignore
-docs/DESIGN.md, docs/adr/0001-…, GLOSSARY.md, docs/HANDOFF.md
+docs/DESIGN.md, docs/DEVELOPMENT.md, docs/adr/0001-…, GLOSSARY.md, docs/HANDOFF.md
 ```

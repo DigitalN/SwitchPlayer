@@ -39,7 +39,7 @@ A Mac app that builds and plays the maintainer's own Switch games through nxnati
 
 ## App updates
 
-Mac Engine Room's updater (`Application Files/updater.py` and the helpers it imports from `launch.py`; *How updates work* and *Testing the updater* in its `docs/DEVELOPMENT.md`): GitHub releases of the public `DigitalN/SwitchPlayer` repo, a `.dmg` signed with the maintainer's Apple Development certificate (team `XT4LT7MS6Y`), checked once a day after a wake. Its busy hook holds the relaunch while a Build runs or waits.
+Mac Engine Room's updater (`Application Files/updater.py` and the helpers it imports from `launch.py`; *How updates work* and *Release checklist* in `docs/DEVELOPMENT.md`): GitHub releases of the public `DigitalN/SwitchPlayer` repo, a `.dmg` signed with the maintainer's Apple Development certificate (team `XT4LT7MS6Y`), checked once a day after a wake, plus Check for Updates… in the application menu. Its busy hook holds the relaunch while a Build runs or waits.
 
 ## Moving off NX Play
 

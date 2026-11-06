@@ -1,0 +1,7 @@
+# Pinned so packaging never silently pulls in newer, unreviewed versions.
+pywebview==6.1
+pyobjc-core==12.1
+pyobjc-framework-Cocoa==12.1
+pyobjc-framework-Quartz==12.1
+pyobjc-framework-WebKit==12.1
+pyinstaller==6.19.0
