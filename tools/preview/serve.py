@@ -7,10 +7,10 @@ in Claude's browser pane). The page is rebuilt from Application Files/index.html
 on every load, so a reload shows the latest edit. Query options are listed at the top of
 stub.js.
 
-The games are the Library folder's (NXPLAYER_PREVIEW_LIBRARY, or NX Play's
+The games are the Library folder's (SWITCHPLAYER_PREVIEW_LIBRARY, or NX Play's
 ~/Downloads/Switch Games), found and named by the app's own library.py and titledb.py, so
 they can't drift from it. The names and art titledb.py downloads (the eShop's title list once,
-then each game's icon from Nintendo's CDN) are kept in NXPLAYER_DATA_DIR, or
+then each game's icon from Nintendo's CDN) are kept in SWITCHPLAYER_DATA_DIR, or
 tools/preview/.data, not in the app's own data folder. The Library folder is only read: nothing
 there or in nxnative's folders is written, and nothing is opened or built. This is a
 development tool on localhost only; nothing here ships in the app.
@@ -27,8 +27,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 APP_DIR = HERE.parent.parent / "Application Files"
-LIBRARY = Path(os.environ.get("NXPLAYER_PREVIEW_LIBRARY", "~/Downloads/Switch Games")).expanduser()
-DATA_DIR = Path(os.environ.get("NXPLAYER_DATA_DIR", HERE / ".data")).expanduser()
+LIBRARY = Path(os.environ.get("SWITCHPLAYER_PREVIEW_LIBRARY", "~/Downloads/Switch Games")).expanduser()
+DATA_DIR = Path(os.environ.get("SWITCHPLAYER_DATA_DIR", HERE / ".data")).expanduser()
 sys.path.insert(0, str(APP_DIR))
 
 import library  # noqa: E402  (pure: no AppKit)

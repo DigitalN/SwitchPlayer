@@ -23,7 +23,7 @@ from pathlib import Path
 
 from nxnative import NxnativeError
 
-log = logging.getLogger("nxplayer")
+log = logging.getLogger("switchplayer")
 
 STOP_GRACE = 20  # seconds a Build gets to stop by itself at Quit before it's ended
 
@@ -171,7 +171,7 @@ class Builder:
                 ok = self._build(job)
             except Exception:
                 log.exception("The Build of %s failed unexpectedly", job.name)
-                self._finish(job, "failed", "NX Player couldn't follow this Build; its log has more")
+                self._finish(job, "failed", "Switch Player couldn't follow this Build; its log has more")
             try:
                 self._on_finish(job, ok)
             except Exception:

@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-log = logging.getLogger("nxplayer")
+log = logging.getLogger("switchplayer")
 
 LIST_URL = "https://raw.githubusercontent.com/blawar/titledb/master/US.en.json"
 IMAGE_HOST = "img-eshop.cdn.nintendo.net"  # the list is third-party data: images only from here

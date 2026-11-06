@@ -1,4 +1,4 @@
-NX Player includes code adapted from the projects below.
+Switch Player includes code adapted from the projects below.
 
 --------------------------------------------------------------------------------
 NX Play
@@ -7,6 +7,9 @@ https://github.com/varyform/nx-native-wrapper
 Used for game names and art: the eShop title list lookup and the Nintendo-CDN-only image
 download in "Application Files/titledb.py", from
 Packages/NXPlayKit/Sources/NXPlayKit/Model/Artwork.swift.
+
+The Python dependency list in "Application Files/nxnative-python/pyproject.toml" is adapted
+from NX Play's pyproject.toml.
 
 MIT License
 

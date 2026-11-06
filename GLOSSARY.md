@@ -1,4 +1,4 @@
-# NX Player
+# Switch Player
 
 A Mac app that builds and plays the player's own Switch games through nxnative, without the command line. Everything about how a game runs is left to nxnative.
 
@@ -55,13 +55,13 @@ The window a Game app shows before its game starts, where the player changes its
 ### nxnative and updates
 
 **nxnative copy**:
-The nxnative checkout NX Player builds with: its own clone of upstream nxnative, or a checkout the player points it at, which NX Player then never changes.
+The nxnative checkout Switch Player builds with: its own clone of upstream nxnative, or a checkout the player points it at, which Switch Player then never changes.
 _Avoid_: engine, repo
 
 **Engine update**:
-Bringing NX Player's own nxnative copy up to upstream nxnative's latest code.
+Bringing Switch Player's own nxnative copy up to upstream nxnative's latest code.
 _Avoid_: update (on its own)
 
 **App update**:
-A new release of NX Player itself, which NX Player installs.
+A new release of Switch Player itself, which Switch Player installs.
 _Avoid_: update (on its own)
