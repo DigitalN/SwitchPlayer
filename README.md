@@ -27,7 +27,7 @@ Switch Player doesn't include any games or keys.
 
 1. Open the disk image and drag **Switch Player** to **Applications**.
 2. Open Switch Player. Coming from NX Play? Your Library folder and keys file are picked up automatically. Otherwise choose **Switch Player → Choose Library Folder…**, with one folder (or one `.nup` file) per game, and **Choose Keys File…** if your games need keys. Switch 2 games, as a `.nup` or a folder of their files, need no keys.
-3. **Build Setup** opens each time Switch Player starts and lists what a Build needs. Follow its Xcode and Metal Toolchain steps, and run the one Terminal command it shows for the .NET SDK (it asks for your password, which an app can't), then click **Install Build Tools**. Once everything has a tick, click **Done**.
+3. **Build Setup** opens when Switch Player starts while something a Build needs is missing, and lists it all (**Build Setup…** in the Switch Player menu shows it any time). Follow its Xcode and Metal Toolchain steps, and run the one Terminal command it shows for the .NET SDK (it asks for your password, which an app can't), then click **Install Build Tools**. Once everything has a tick, click **Done**.
 4. Click **Build** beside a game. The first Build also downloads nxnative and installs the Python packages it needs, so it takes a little longer.
 5. When the game says **Ready**, click its artwork to play.
 
@@ -53,7 +53,7 @@ Click **⋯** or right-click a game for its **Settings…** window, **Build Opti
 
 **nxnative** changes often. Switch Player compares your built games with the latest nxnative each time it opens and once a day. When a change affects a game, its tile says *Your version is out of date, consider rebuilding*; other changes show as a count. **Switch Player → Check for nxnative Updates…** checks now and tells you what it found. Every Build uses the latest nxnative.
 
-**Switch Player** updates itself from this repository's releases, checking once a day. **Switch Player → Check for Updates…** checks now.
+**Switch Player** updates itself from this repository's releases, checking each time it opens and once a day, and shows each step at the bottom of the window. **Switch Player → Check for Updates…** checks now.
 
 ### Building with your own nxnative checkout
 

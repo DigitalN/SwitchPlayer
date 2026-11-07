@@ -72,7 +72,7 @@ class Native:
         return alert.runModal() == NSAlertFirstButtonReturn
 
     def alert(self, title, message):
-        """A result the player asked for, shown as Check for Updates… shows its own."""
+        """A result the player asked for, such as Check for nxnative Updates…'s."""
         from AppKit import NSAlert
         launch.activate_app()
         alert = NSAlert.alloc().init()
@@ -176,10 +176,26 @@ class SwitchPlayerApp:
         self._caffeinate = None
         self._updater = updater.Updater(launch.bundle_path(), VERSION, self._data_dir,
                                         is_busy=lambda: bool(self._builder and self._builder.busy),
-                                        on_status=self._update_status, quit_app=self._quit_for_update)
+                                        on_status=self._update_status, quit_app=self._quit_for_update,
+                                        on_toast=self._update_toast_changed)
 
     def _update_status(self, status, version):
         log.info("App update status: %s%s", status, f" {version}" if version else "")
+
+    def _update_toast_changed(self):
+        """A new step or result for the App update toast: the page asks for it now rather than at
+        its next poll, so a step as short as Installing… still shows. evaluate_js waits for the
+        page, so never on the main thread; before the page has loaded, nudge() isn't there yet."""
+        window = self._window
+        if window is None:
+            return
+
+        def nudge():
+            try:
+                window.evaluate_js("window.nudge && nudge()")
+            except Exception as e:  # a page that's loading or gone: its next poll shows it
+                log.debug("Couldn't nudge the page: %s", e)
+        threading.Thread(target=nudge, name="toast-nudge", daemon=True).start()
 
     def _quit_for_update(self):
         import AppKit
@@ -364,7 +380,7 @@ class SwitchPlayerApp:
         if not folder:
             self._games = {}
             self._scan_folder = None
-            return {"folder_name": None, "games": []}
+            return {"folder_name": None, "games": [], "update": self._updater.toast()}
         now = time.monotonic()
         if folder != self._scan_folder or self._last_scan is None or now - self._last_scan >= 2:
             games = library.scan(folder)
@@ -398,7 +414,7 @@ class SwitchPlayerApp:
                 "nxplay_save": game.nxplay_save,
                 "options": values["build_options"].get(game.id, ""),
             })
-        return {"folder_name": Path(folder).name, "games": result}
+        return {"folder_name": Path(folder).name, "games": result, "update": self._updater.toast()}
 
     def _files_changed(self, game):
         """Whether the Game folder gained files since the Game app's Build: by the record that
@@ -714,6 +730,15 @@ class Api:
 
     def setup(self):
         return prerequisites.check()
+
+    def install_update(self):
+        self._app._updater.install_now()
+
+    def dismiss_update(self, toast_id):
+        self._app._updater.dismiss(toast_id)
+
+    def open_releases_page(self):
+        updater.open_releases_page()
 
     def install_tools(self):
         try:

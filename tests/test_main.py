@@ -23,7 +23,7 @@ def no_background_downloads(monkeypatch):
 def test_library_waits_for_a_folder_choice(tmp_path):
     api = main.Api(main.SwitchPlayerApp(data_dir=tmp_path, first_launch=dict))
 
-    assert api.library() == {"folder_name": None, "games": []}
+    assert api.library() == {"folder_name": None, "games": [], "update": None}
 
 
 def test_library_returns_the_page_contract_for_an_unbuilt_game(tmp_path):
@@ -53,6 +53,7 @@ def test_library_returns_the_page_contract_for_an_unbuilt_game(tmp_path):
             "nxplay_save": False,
             "options": "",
         }],
+        "update": None,  # the App update toast (updater.Updater.toast): none from a source checkout
     }
 
 
