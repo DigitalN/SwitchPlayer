@@ -22,7 +22,7 @@ import updater
 log = logging.getLogger("switchplayer")
 
 APP_NAME = "Switch Player"
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 BUNDLE_ID = "com.digitaln.switchplayer"
 BUILD_LOG_FIRST = 512 * 1024  # how much of a long Build log the pane starts with
 BUILD_LOG_PIECE = 256 * 1024  # and reads at most at a time
@@ -341,7 +341,7 @@ class SwitchPlayerApp:
         ])]
         window = webview.create_window(
             APP_NAME, html=(Path(__file__).resolve().parent / "index.html").read_text(encoding="utf-8"),
-            js_api=Api(self), width=960, height=700, min_size=(420, 400), menu=menus,
+            js_api=Api(self), width=1200, height=750, min_size=(420, 400), menu=menus,  # three columns beside the Build Log
         )
         self.attach_window(window)
         window.events.closing += self.close_window
