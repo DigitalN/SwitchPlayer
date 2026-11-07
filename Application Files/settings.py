@@ -22,6 +22,7 @@ DEFAULTS = {
     "build_options": {},  # {game id: options as typed}, only for games that have some
     # The Build Log pane: shown or not, its width, and the game whose log it showed last
     "build_log_pane": {"open": True, "width": 380, "game": None},
+    "settings_advanced": False,  # the Settings panel shows its Advanced settings
 }
 PANE_WIDTHS = (280, 720)
 
@@ -49,6 +50,8 @@ def validate(raw):
             s["build_log_pane"]["width"] = int(min(PANE_WIDTHS[1], max(PANE_WIDTHS[0], width)))
         if isinstance(pane.get("game"), str) and pane["game"]:
             s["build_log_pane"]["game"] = pane["game"]
+    if isinstance(raw.get("settings_advanced"), bool):
+        s["settings_advanced"] = raw["settings_advanced"]
     return s
 
 

@@ -57,8 +57,12 @@ Starting a Game app straight into its game, with the player's saved Game setting
 The choices a Game app offers before its game starts (frame rate, render scale, …), kept by that Game app.
 _Avoid_: options, preferences, Build options
 
+**Settings panel**:
+Switch Player's own dialog for one Game's Game settings, drawn from its Game app's settings list. **Save** keeps the choices for the Game app's next start; **Close Without Saving** throws them away.
+_Avoid_: preferences, options, Settings window (that's the Game app's own)
+
 **Settings window**:
-The window a Game app shows before its game starts, where the player changes its Game settings.
+The window a Game app shows before its game starts, where the player changes its Game settings. It opens from Finder or the Dock as nxnative decides; Switch Player opens it only for a settings list the Settings panel can't draw.
 
 ### nxnative and updates
 

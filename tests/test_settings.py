@@ -16,6 +16,7 @@ def test_validate_returns_complete_independent_defaults():
         "nxnative_checkout": None,
         "build_options": {},
         "build_log_pane": {"open": True, "width": 380, "game": None},
+        "settings_advanced": False,
     }
     assert second == first
     first["build_options"]["game"] = "--option"
@@ -37,6 +38,7 @@ def test_validate_expands_paths_cleans_options_and_drops_unknown_keys():
         },
         "unknown": "ignored",
         "build_log_pane": {"open": False, "width": 100, "game": 7},
+        "settings_advanced": "yes",
     }
 
     assert settings.validate(raw) == {
@@ -45,6 +47,7 @@ def test_validate_expands_paths_cleans_options_and_drops_unknown_keys():
         "nxnative_checkout": None,
         "build_options": {"game": "--flag 'two words'"},
         "build_log_pane": {"open": False, "width": 280, "game": None},  # the narrowest; a game is a name
+        "settings_advanced": False,  # only a bool counts
     }
 
 
