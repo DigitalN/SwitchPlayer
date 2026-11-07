@@ -53,6 +53,8 @@ A Mac app that builds and plays the maintainer's own Switch games through nxnati
 
 Mac Engine Room's updater (`Application Files/updater.py` and the helpers it imports from `launch.py`; *How updates work* and *Release checklist* in `docs/DEVELOPMENT.md`): GitHub releases of the public `DigitalN/SwitchPlayer` repo, a `.dmg` signed with the maintainer's Apple Development certificate (team `XT4LT7MS6Y`), checked once a day after a wake, plus Check for Updates… in the application menu. Its busy hook holds the relaunch while a Build runs or waits.
 
+**The icon after an update** (added 2026-11-06): an update replaces the app in place, and macOS can go on showing the icon it cached for that path; the Dock kept 0.1.0's after updates to 0.1.2. So the first launch of each version (`launched-version` in the data folder) shows the bundle's own icon in the Dock, and in the background registers the bundle with Launch Services again (`lsregister -f`) and updates its date. Later launches leave the Dock tile to macOS, so its icon styles apply. It runs in the new version's own code, so it also mends copies updated before it existed.
+
 ## Moving off NX Play
 
 - First launch fills in NX Play's Library folder and keys file (below).

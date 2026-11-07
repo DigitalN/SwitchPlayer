@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import builds
+import launch
 import main
 import nxnative
 
@@ -1164,3 +1165,34 @@ def test_an_earlier_launchs_build_log_shows_before_any_build(tmp_path):
     assert app._builder is None
     assert api.library()["games"][0]["build_log"] is True
     assert api.build_log("Ocarina of Time")["text"] == "Build of Ocarina of Time\nExit code 0.\n"
+
+
+def test_a_new_versions_first_launch_shows_the_bundles_icon_and_refreshes_the_cache(tmp_path, monkeypatch):
+    app_path = tmp_path / "Switch Player.app"
+    (app_path / "Contents" / "Resources").mkdir(parents=True)
+    (app_path / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIconFile": "SwitchPlayer.icns"}))
+    icon = app_path / "Contents" / "Resources" / "SwitchPlayer.icns"
+    icon.write_bytes(b"icns")
+    refreshed = []
+    monkeypatch.setattr(launch, "refresh_icon_cache",
+                        lambda app, data, version: refreshed.append((app, data, version)) or
+                        (data / launch.LAUNCHED_VERSION).write_text(version))
+
+    class IconNative(FakeNative):
+        def show_bundle_icon(self, path):
+            self.calls.append(("icon", path))
+
+    native = IconNative()
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=dict, native=native)
+    app._refresh_icon_if_updated(None)  # running from source: nothing to do
+    app._refresh_icon_if_updated(app_path)
+    marker = tmp_path / "data" / launch.LAUNCHED_VERSION
+    deadline = time.monotonic() + 5
+    while not marker.exists() and time.monotonic() < deadline:  # the refresh runs on a thread of its own
+        time.sleep(0.01)
+    assert native.calls == [("icon", icon)]
+    assert refreshed == [(app_path, tmp_path / "data", main.VERSION)]
+
+    native.calls.clear()
+    app._refresh_icon_if_updated(app_path)  # the next launch of the same version
+    assert native.calls == []
