@@ -31,7 +31,7 @@ Switch Player doesn't include any games or keys.
 4. Click **Build** beside a game. The first Build also downloads nxnative and installs the Python packages it needs, so it takes a little longer.
 5. When the game says **Ready**, click its artwork to play.
 
-![Build Setup, with Xcode ready and the Metal Toolchain and Build tools still to do](docs/images/setup.png)
+![Build Setup, with Xcode ready and the Metal Toolchain, .NET SDK and Build tools still to do](docs/images/setup.png)
 
 Closing the window doesn't stop a Build. Quitting Switch Player asks first.
 
