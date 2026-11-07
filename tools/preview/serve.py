@@ -1,6 +1,6 @@
 """Serve the library page in a browser, with a stand-in for pywebview's API (stub.js).
 
-    python3 tools/preview/serve.py [port]
+    python3 tools/preview/serve.py [port]    (or the PORT environment variable; 8766 by default)
 
 Then open http://127.0.0.1:8766/ (the `page-preview` entry in .claude/launch.json does both
 in Claude's browser pane). The page is rebuilt from Application Files/index.html and stub.js
@@ -82,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8766
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 8766))  # PORT: a second preview beside the first
     build()  # fail now, not on the first load
     print(f"Serving the library page at http://127.0.0.1:{port}/ with the games in {LIBRARY}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

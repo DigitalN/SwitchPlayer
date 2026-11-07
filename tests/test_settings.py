@@ -15,10 +15,13 @@ def test_validate_returns_complete_independent_defaults():
         "keys_file": None,
         "nxnative_checkout": None,
         "build_options": {},
+        "build_log_pane": {"open": True, "width": 380, "game": None},
     }
     assert second == first
     first["build_options"]["game"] = "--option"
+    first["build_log_pane"]["open"] = False
     assert second["build_options"] == {}
+    assert second["build_log_pane"]["open"] is True and settings.DEFAULTS["build_log_pane"]["open"] is True
 
 
 def test_validate_expands_paths_cleans_options_and_drops_unknown_keys():
@@ -33,6 +36,7 @@ def test_validate_expands_paths_cleans_options_and_drops_unknown_keys():
             12: "--ignored",
         },
         "unknown": "ignored",
+        "build_log_pane": {"open": False, "width": 100, "game": 7},
     }
 
     assert settings.validate(raw) == {
@@ -40,6 +44,7 @@ def test_validate_expands_paths_cleans_options_and_drops_unknown_keys():
         "keys_file": str(Path("~/prod.keys").expanduser()),
         "nxnative_checkout": None,
         "build_options": {"game": "--flag 'two words'"},
+        "build_log_pane": {"open": False, "width": 280, "game": None},  # the narrowest; a game is a name
     }
 
 

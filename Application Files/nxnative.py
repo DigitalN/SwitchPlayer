@@ -29,7 +29,9 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
+import threading
 from collections import Counter
 from pathlib import Path
 
@@ -52,7 +54,13 @@ class NxnativeError(Exception):
         self.returncode = returncode
 
 
-def _run(argv, cwd=None, env=None, timeout=600):
+def _run(argv, cwd=None, env=None, timeout=600, out=None, started=None):
+    """Runs a tool and returns its output. With `out`, a Build's preparation: each line it
+    prints goes to out(line) as it comes (a line it rewrites in place, as git's progress does,
+    once, as it ends), and started(process) gets the process, which has a session of its own,
+    so Stop can interrupt it and whatever it started."""
+    if out is not None:
+        return _stream(argv, cwd, env, timeout, out, started)
     try:
         result = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -66,8 +74,55 @@ def _run(argv, cwd=None, env=None, timeout=600):
     return result.stdout.strip()
 
 
-def git(repo, *args, timeout=600):
-    return _run(["/usr/bin/git", "-C", str(repo), *args], timeout=timeout)
+def _stream(argv, cwd, env, timeout, out, started):
+    name = f"{Path(argv[0]).name} {argv[1]}"
+    try:
+        process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError as e:
+        raise NxnativeError(f"Couldn't run {argv[0]}: {e.strerror}") from None
+    if started:
+        started(process)
+    timed_out = threading.Event()
+
+    def end():
+        timed_out.set()
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    timer = threading.Timer(timeout, end)
+    timer.daemon = True
+    timer.start()
+    lines = []
+    try:
+        for raw in process.stdout:
+            parts = [p.rstrip() for p in raw.decode("utf-8", "replace").rstrip("\n").split("\r")]
+            line = next((p for p in reversed(parts) if p.strip()), "")
+            if line:
+                out(line)
+                lines = (lines + [line])[-5:]
+        code = process.wait()
+    finally:
+        timer.cancel()
+        process.stdout.close()
+    if timed_out.is_set():
+        raise NxnativeError(f"{name} took longer than {timeout // 60:.0f} minutes")
+    if code != 0:
+        raise NxnativeError(lines[-1] if lines else f"{name} failed ({code})", returncode=code)
+    return "\n".join(lines)
+
+
+def interrupted(error):
+    """The tool behind an NxnativeError was ended by a signal (Stop sends SIGINT), not failing
+    by itself."""
+    code = getattr(error, "returncode", None)
+    return code is not None and (code < 0 or code == 130)
+
+
+def git(repo, *args, timeout=600, out=None, started=None):
+    return _run(["/usr/bin/git", "-C", str(repo), *args], timeout=timeout, out=out, started=started)
 
 
 class Copy:
@@ -92,7 +147,12 @@ class Copy:
         except NxnativeError:
             return None
 
-    def ensure(self):
+    @property
+    def needs_download(self):
+        """Switch Player's own copy isn't there yet: the next update() clones it."""
+        return self.own and not self.ready()
+
+    def ensure(self, out=None, started=None):
         """Clones Switch Player's own copy if it isn't there yet."""
         if self.ready():
             return
@@ -104,33 +164,39 @@ class Copy:
         shutil.rmtree(part, ignore_errors=True)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         log.info("Cloning nxnative into %s", self.path)
-        _run(["/usr/bin/git", "clone", "--quiet", "--filter=blob:none", self._upstream, str(part)], timeout=1800)
+        _run(["/usr/bin/git", "clone", "--progress" if out else "--quiet", "--filter=blob:none", self._upstream, str(part)],
+             timeout=1800, out=out, started=started)
         if self.path.exists():
             shutil.rmtree(self.path)
         os.replace(part, self.path)
 
-    def fetch(self):
+    def fetch(self, out=None, started=None):
         """Fetches upstream's latest without moving the copy to it (Switch Player's own copy only)."""
         if self.own and self.ready():
-            git(self.path, "fetch", "--quiet", "--prune", "origin", timeout=300)
+            git(self.path, "fetch", "--progress" if out else "--quiet", "--prune", "origin", timeout=300,
+                out=out, started=started)
 
-    def update(self, say=None):
+    def update(self, out=None, started=None, say=None):
         """The Engine update, as a Build starts: Switch Player's own copy moves to upstream's latest.
-        Returns the commit the Build will use. When upstream can't be reached, a copy that's
-        already complete is used as it is, and say(line) tells the Build's log; only having no
-        copy yet fails (the clone needs the network)."""
-        self.ensure()
+        Returns the commit the Build will use. With `out` and `started`, as _run() takes them.
+        When upstream can't be reached, a copy that's already complete is used as it is, and
+        say(line) tells the Build's log; only having no copy yet fails (the clone needs the
+        network). A fetch that Stop interrupted still fails, so the Build stops."""
+        self.ensure(out, started)
         if self.own:
             before = self.commit()
             try:
-                self.fetch()
+                self.fetch(out, started)
             except NxnativeError as e:
+                if interrupted(e):
+                    raise
                 log.warning("Engine update: couldn't fetch nxnative (%s); using the copy as it is, at %s", e, before)
                 if say:
                     say(f"Couldn't reach nxnative's upstream ({e}). Building with Switch Player's copy as it is"
                         + (f", at {before}." if before else "."))
                 return before
-            git(self.path, "reset", "--quiet", "--hard", self._upstream_head(), timeout=300)
+            git(self.path, "reset", *([] if out else ["--quiet"]), "--hard", self._upstream_head(), timeout=300,
+                out=out, started=started)
             after = self.commit()
             if after != before:
                 log.info("Engine update: nxnative %s → %s", before, after)
@@ -263,7 +329,7 @@ class Environment:
         synced = self.folder / "synced-pyproject.toml"
         return self.python.exists() and synced.is_file() and synced.read_bytes() == self.project_source.read_bytes()
 
-    def ensure(self):
+    def ensure(self, out=None, started=None):
         if self.ready():
             return
         uv = find_uv()
@@ -276,7 +342,8 @@ class Environment:
         env = {**_base_env(), "UV_PROJECT_ENVIRONMENT": str(self.venv), "UV_PYTHON_INSTALL_DIR": str(self.folder / "python"),
                "UV_CACHE_DIR": str(self.folder / "uv-cache"), "UV_PYTHON_PREFERENCE": "only-managed", "UV_NO_PROGRESS": "1"}
         try:
-            _run([str(uv), "sync", "--quiet", "--project", str(self.project)], env=env, timeout=1800)
+            _run([str(uv), "sync", *([] if out else ["--quiet"]), "--project", str(self.project)], env=env,
+                 timeout=1800, out=out, started=started)
         except NxnativeError as e:
             raise NxnativeError(f"Couldn't install nxnative's Python packages: {e}") from None
         shutil.copyfile(self.project_source, self.folder / "synced-pyproject.toml")

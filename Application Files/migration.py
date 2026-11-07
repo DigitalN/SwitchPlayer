@@ -25,8 +25,9 @@ def _copy(source, destination, copy_tree):
 def first_build(source, destination, copy_tree=shutil.copytree):
     source, destination = Path(source), Path(destination)
     if destination.exists() or not source.is_dir():
-        return
+        return False
     _copy(source, destination, copy_tree)
+    return True
 
 
 def modified(save):

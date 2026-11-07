@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import builds
 import main
 import nxnative
 
@@ -47,6 +48,7 @@ def test_library_returns_the_page_contract_for_an_unbuilt_game(tmp_path):
             "out_of_date": False,
             "newer": 0,
             "log": False,
+            "build_log": False,
             "nxplay_save": False,
             "options": "",
         }],
@@ -184,6 +186,9 @@ class FakeNative:
     def reveal(self, path):
         self.calls.append(("reveal", Path(path)))
 
+    def open_in_console(self, path):
+        self.calls.append(("console", Path(path)))
+
 
 def test_play_settings_finder_and_logs_use_the_native_adapter(tmp_path):
     tid = "0100D9F01D474000"
@@ -216,7 +221,7 @@ def test_play_settings_finder_and_logs_use_the_native_adapter(tmp_path):
     api.play("Rhythm Heaven")
     api.open_settings("Rhythm Heaven")
     api.show_log("Rhythm Heaven")
-    api.show_build_log("Rhythm Heaven")
+    api.open_build_log("Rhythm Heaven")
     api.show_in_finder("Rhythm Heaven")
 
     game_app = folder / "Rhythm Heaven Groove.app"
@@ -224,7 +229,7 @@ def test_play_settings_finder_and_logs_use_the_native_adapter(tmp_path):
         ("open", game_app, True),
         ("open", game_app, False),
         ("reveal", game_log),
-        ("reveal", build_log),
+        ("console", build_log),
         ("reveal", game_app),
     ]
 
@@ -250,7 +255,7 @@ def test_build_prepares_the_isolated_nxnative_script_and_environment(tmp_path, m
     keys = tmp_path / "prod.keys"
     keys.touch()
     prepared = []
-    monkeypatch.setattr(nxnative.Environment, "ensure", lambda self: prepared.append(self.folder))
+    monkeypatch.setattr(nxnative.Environment, "ensure", lambda self, **kwargs: prepared.append(self.folder))
     stages = []
     monkeypatch.setattr(nxnative.Environment, "ready",
                         lambda self: stages.append(main.Api(app).library()["games"][0]["progress"]) or False)
@@ -298,7 +303,7 @@ def test_build_prepares_the_isolated_nxnative_script_and_environment(tmp_path, m
         "-k", str(keys), "--flag", "two words",
     ]
     assert prepared == [data / "nxnative-python"]
-    assert stages == [{"preparing": "Updating nxnative"}]
+    assert stages == [{"preparing": "Updating nxnative", "elapsed": 0}]
     assert (save_root / tid / "save" / "progress").read_text() == "NX Play"
     assert (source / "progress").read_text() == "NX Play"
     assert (folder / "Rhythm Heaven Groove.app" / "Contents" / "Info.plist").is_file()
@@ -1089,3 +1094,73 @@ def test_setup_menu_opens_the_dialog_and_install_failures_are_reported(tmp_path,
 
     monkeypatch.setattr(main.prerequisites, "install_tools", fail)
     assert main.Api(app).install_tools() is False
+
+
+def pane_app(tmp_path, builder=None):
+    folder = tmp_path / "Switch Games" / "Ocarina of Time"
+    folder.mkdir(parents=True)
+    (folder / "Ocarina of Time [0400486024DEC000].nup").touch()
+    return main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=lambda: {"library_folder": str(folder.parent)},
+                                builder=builder or FakeBuilder(), native=FakeNative(),
+                                dispatch=lambda function, *args: function(*args))
+
+
+def test_the_build_log_pane_reads_the_log_in_whole_lines(tmp_path):
+    builder = FakeBuilder()
+    builder.log = None
+    api = main.Api(pane_app(tmp_path, builder))
+    assert api.library()["games"][0]["build_log"] is False
+    assert api.build_log("Ocarina of Time") is None  # no Build yet
+
+    builder.log = tmp_path / "Ocarina of Time.log"
+    builder.log.write_bytes("Build of Ocarina of Time\n── Downloading nxnative\n   Receiving obj".encode())
+    assert api.library()["games"][0]["build_log"] is True
+    first = api.build_log("Ocarina of Time", 0, None)
+    assert first["text"] == "Build of Ocarina of Time\n── Downloading nxnative\n"  # the half-written line waits
+    with open(builder.log, "ab") as f:
+        f.write("ects: 100%, done.\n[RED] less than 31 GB free\n".encode())
+    second = api.build_log("Ocarina of Time", first["offset"], first["key"])
+    assert second["key"] == first["key"]
+    assert second["text"] == "   Receiving objects: 100%, done.\n[RED] less than 31 GB free\n"
+    assert api.build_log("Ocarina of Time", second["offset"], second["key"])["text"] == ""
+
+    builder.log.rename(tmp_path / "Ocarina of Time.prev.log")  # the next Build: a new file
+    builder.log.write_text("Build of Ocarina of Time, again\n")
+    again = api.build_log("Ocarina of Time", second["offset"], second["key"])
+    assert again["key"] != second["key"] and again["text"] == "Build of Ocarina of Time, again\n"
+
+
+def test_a_long_build_log_starts_at_its_last_lines(tmp_path, monkeypatch):
+    builder = FakeBuilder()
+    builder.log = tmp_path / "long.log"
+    builder.log.write_text("".join(f"line {i}\n" for i in range(1000)))
+    monkeypatch.setattr(main, "BUILD_LOG_FIRST", 100)
+    api = main.Api(pane_app(tmp_path, builder))
+    piece = api.build_log("Ocarina of Time", 0, None)
+    assert piece["text"].startswith("line 9") and piece["text"].endswith("line 999\n")
+    assert piece["offset"] == builder.log.stat().st_size
+
+
+def test_the_build_log_pane_keeps_its_state(tmp_path):
+    app = pane_app(tmp_path)
+    api = main.Api(app)
+    assert api.ui_state() == {"log_open": True, "log_width": 380, "log_game": None}
+    api.set_ui_state({"log_open": False, "log_width": 9999, "log_game": "Ocarina of Time"})
+    reopened = main.Api(main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=dict))
+    assert reopened.ui_state() == {"log_open": False, "log_width": 720, "log_game": "Ocarina of Time"}
+    api.set_ui_state({"log_width": "wide", "log_open": "yes"})  # anything else is ignored
+    assert api.ui_state() == {"log_open": False, "log_width": 720, "log_game": "Ocarina of Time"}
+    api.set_ui_state(None)
+
+
+def test_an_earlier_launchs_build_log_shows_before_any_build(tmp_path):
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=dict)
+    app._settings.update({"library_folder": str(tmp_path / "Switch Games")})
+    (tmp_path / "Switch Games" / "Ocarina of Time").mkdir(parents=True)
+    log = builds.log_path(tmp_path / "data" / "Logs" / "Builds", "Ocarina of Time")
+    log.parent.mkdir(parents=True)
+    log.write_text("Build of Ocarina of Time\nExit code 0.\n")
+    api = main.Api(app)
+    assert app._builder is None
+    assert api.library()["games"][0]["build_log"] is True
+    assert api.build_log("Ocarina of Time")["text"] == "Build of Ocarina of Time\nExit code 0.\n"
