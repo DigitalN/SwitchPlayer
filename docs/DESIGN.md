@@ -10,7 +10,8 @@ A Mac app that builds and plays the maintainer's own Switch games through nxnati
 
 - One Library folder, one Game folder per Game: a subfolder with the base game, update and DLC, or a single `.nup` file. Loose `.nsp` files at the top level are ignored.
 - **Names** are the game's own, never just the Game folder's, which the player may not have named well: after a Build, its Game app's (`CFBundleDisplayName`, which nxnative takes from the game's files); before, titledb's, without ™, ® and ©; the Game folder's (or `.nup`'s) name only while neither is known. Up to two lines, sorted alphabetically, ignoring a leading "The".
-- A grid of square album art. Under each: the name and a one-line status (Not built, Waiting, Building with stage, % and time left, Stopped, Build failed with nxnative's `[RED]` message and a Show Build Log link, Ready). While building, a progress bar across the bottom of the art.
+- A grid of square album art. Under each: the name and a one-line status (Not built, Built in NX Play, Waiting, Preparing Build with what it's doing (Updating nxnative, or Installing Python packages only while they install), Building with stage, % and time left, Stopped, Build failed with nxnative's `[RED]` message and a Show Build Log link, Ready). While building, a progress bar across the bottom of the art.
+- **Built in NX Play**: NX Play built the game with nxnative's developer path (`--platform mac`), which makes no Game app (ADR 0001 rules that path out for Switch Player). Told apart by the files only NX Play writes into the build folder, `start_mac.sh` or `nxplay-settings.json`: the same `<title ID>_build` folder is left by a Switch Player Build that stopped or failed, which shows Not built. Detail: "Build once to play it here. It reuses NX Play's files and brings your save." The Build reuses the build folder's extracted files and shader cache.
 - Clicking the art plays. A small **Build** or **Stop** button sits beside the status when there's something to build or stop.
 - **⋯**: Settings…, Build Options…, Show Log, Show in Finder, Rebuild, Import NX Play Save… (only for a game with an NX Play save).
 - **Art**: the eShop's 1024×1024 icon (the game's own icon is only 256×256, soft at grid sizes). Found through blawar/titledb's `US.en.json` (26 MB gzipped, fetched only when a game without art or a name appears, and read one entry at a time; keep only the library's entries; a title listed twice takes its lowest nsuId's entry, the original listing), images from Nintendo's CDN only, kept for good. Before the first Build when the title ID can be told from file names or an existing build folder. Offline or unlisted: the Game app's own icon after its first Build, a plain tile with the name before.
@@ -33,9 +34,10 @@ A Mac app that builds and plays the maintainer's own Switch games through nxnati
 ## nxnative
 
 - Switch Player keeps its own clone of `seedds/nxnative` in its Application Support folder. It never touches `~/nxnative` or the clones in `~/dev`. A setting can point it at another checkout, which Switch Player then never changes.
-- Engine update: it fetches when it opens, once a day after a wake, and on Check Now (for the warnings), and moves its copy to upstream's latest only when a Build starts. Its own clone has no local commits, so it can always follow upstream, force pushes included.
+- Engine update: it fetches when it opens, once a day after a wake, and on **Check for nxnative Updates…** (for the warnings), and moves its copy to upstream's latest only when a Build starts. Its own clone has no local commits, so it can always follow upstream, force pushes included.
 - Builds use whichever Xcode macOS has selected. Switch Player never names an Xcode version; nxnative's own error says when another is needed, and Switch Player shows it.
-- At every launch, a dismissible check reports every prerequisite; Build Setup… reopens it. Nothing installs until the player asks: Homebrew packages install with a button, then Switch Player's own Python environment (uv) is prepared before the first Build. Xcode and its Metal Toolchain stay manual.
+- **Check for nxnative Updates…** answers the way Check for Updates… does: it compares in the background, then a native alert says either "No games built in Switch Player yet", "Your games are up to date with nxnative", or "nxnative has changes for N games" naming the Out of date ones and counting the rest, or why it couldn't check. The automatic checks only update the tiles.
+- At every launch, a dismissible check reports every prerequisite; Build Setup… reopens it. Nothing installs until the player asks: Homebrew packages install with a button. Xcode and its Metal Toolchain stay manual. The check never mentions Switch Player's own Python environment (uv): a Build prepares it when it's missing or its package list changed, and the tile says so.
 
 ## App updates
 
@@ -45,7 +47,7 @@ Mac Engine Room's updater (`Application Files/updater.py` and the helpers it imp
 
 - First launch fills in NX Play's Library folder and keys file (below).
 - At each game's first Build, if the Game app has no save yet: copy NX Play's save (`<title ID>_build/run/save`) to the Game app's (`~/Library/Application Support/nxnative/<title ID>/save`), leaving the original. Game settings are not migrated.
-- Import NX Play Save… does the copy on demand: shows both saves' dates, asks, first moves the current save to `save-backups/<date> before NX Play import` beside it, and refuses while the game runs.
+- Import NX Play Save… does the copy on demand: shows both saves' dates, asks, first moves the current save to `save-backups/<date> before NX Play import` beside it, and refuses while the game runs. Every step is a native alert on the main thread, ending with "NX Play save imported" and where the backup went.
 - The maintainer deletes NX Play once each game has been played in Switch Player.
 
 ## Pull requests to nxnative

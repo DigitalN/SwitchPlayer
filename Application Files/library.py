@@ -15,6 +15,7 @@ from pathlib import Path
 
 TAGGED_ID = re.compile(r"\[(0100[0-9A-F]{12})\]", re.I)
 BUILD_FOLDER = re.compile(r"^(0100[0-9A-F]{12})_build$", re.I)
+NXPLAY_FILES = ("start_mac.sh", "nxplay-settings.json")  # NX Play writes these into a build folder; nxnative doesn't
 LEADING_ARTICLE = re.compile(r"^the\s+", re.I)
 
 
@@ -33,7 +34,26 @@ class Game:
     path: Path
     title_id: str | None
     app: GameApp | None
-    nxplay_save: bool  # NX Play left a save in <title ID>_build/run/save
+    build_folder: Path | None = None  # <title ID>_build, which NX Play's Builds and nxnative's share
+
+    @property
+    def nxplay_build(self):
+        """NX Play built this game with nxnative's developer path: its build folder holds the files
+        NX Play writes, but there is no Game app to Play until Switch Player builds one."""
+        return bool(self.build_folder) and any((self.build_folder / name).is_file() for name in NXPLAY_FILES)
+
+    @property
+    def nxplay_save(self):
+        path = self.nxplay_save_path()
+        return bool(path and path.is_dir())
+
+    def nxplay_save_path(self):
+        """NX Play's save for this game, <title ID>_build/run/save, whether or not it exists."""
+        if not self.title_id:
+            return None
+        root = self.path.parent if self.path.suffix.lower() == ".nup" else self.path
+        folder = self.build_folder or root / f"{self.title_id}_build"
+        return folder / "run" / "save"
 
     def name(self, titledb_name=None):
         """The game's own name: its Game app's, else the eShop's, else the Game folder's
@@ -87,18 +107,20 @@ def _apps_in(folder):
     return [a for a in map(read_app, candidates) if a]
 
 
+def _build_folder(folder, tid):
+    path = folder / f"{tid}_build" if tid else None
+    return path if path and path.is_dir() else None
+
+
 def _game_folder(path):
-    names = [p.name for p in path.iterdir()]
-    tid = next((m.group(1).upper() for n in names if (m := BUILD_FOLDER.match(n))), None)
-    tid = tid or title_id_from_names(names)
+    entries = list(path.iterdir())
+    names = [p.name for p in entries]
+    build = next((p for p in entries if p.is_dir() and BUILD_FOLDER.match(p.name)), None)
+    tid = (BUILD_FOLDER.match(build.name).group(1).upper() if build else None) or title_id_from_names(names)
     apps = _apps_in(path)
     app = next((a for a in apps if a.title_id == tid), None) or (apps[0] if apps and not tid else None)
     tid = tid or (app.title_id if app else None)
-    return Game(id=path.name, path=path, title_id=tid, app=app, nxplay_save=_nxplay_save(path, tid))
-
-
-def _nxplay_save(folder, tid):
-    return bool(tid) and (folder / f"{tid}_build" / "run" / "save").is_dir()
+    return Game(id=path.name, path=path, title_id=tid, app=app, build_folder=build)
 
 
 def scan(library):
@@ -122,7 +144,8 @@ def scan(library):
                 top_apps = _apps_in(library)
             tid = title_id_from_names([p.name])
             app = next((a for a in top_apps if a.title_id == tid), None) if tid else None
-            games.append(Game(id=p.name, path=p, title_id=tid, app=app, nxplay_save=_nxplay_save(library, tid)))
+            games.append(Game(id=p.name, path=p, title_id=tid, app=app,
+                              build_folder=_build_folder(library, tid)))
     return games
 
 

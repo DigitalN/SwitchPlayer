@@ -124,7 +124,7 @@ main { height: 100%; overflow-y: auto; padding: 24px 24px 32px; }
    stage name shortens, and its % and time left always show. */
 .detail.stage { display: flex; white-space: nowrap; }
 .detail.stage span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.detail.stage span + span { flex: none; }
+.detail.stage span + span { flex: none; white-space: pre; }  /* keeps the space before " · 42%" that flex would trim */
 .detail:empty { display: none; }
 .detail.warn { color: var(--warn); }
 .detail .msg {
@@ -201,7 +201,7 @@ dialog input:focus { outline: 3px solid color-mix(in srgb, var(--accent) 45%, tr
 
 <dialog id="setup">
   <h3>Get ready to Build</h3>
-  <p>Switch Player checks what nxnative needs. Xcode and its Metal Toolchain stay manual; nothing is installed until you ask.</p>
+  <p>Switch Player checks the tools a Build needs. Xcode and its Metal Toolchain stay manual; Build tools install only when you ask.</p>
   <ul class="setup-list" id="setup-list"></ul>
   <p id="setup-error" hidden></p>
   <div class="actions"><button class="btn" id="setup-close">Not Now</button><button class="btn" id="setup-recheck">Check Again</button><button class="btn primary" id="setup-install" hidden>Install Build Tools</button></div>
@@ -254,6 +254,7 @@ function statusOf(g) {
     case 'building': {
       const p = g.progress;
       if (!p) return { text: 'Building', cls: 'building', act: 'stop', bar: 0 };
+      if (p.preparing) return { text: 'Preparing Build', cls: 'building', act: 'stop', detail: esc(p.preparing), bar: 0 };
       const pct = isNum(p.frac) ? `${Math.floor(p.frac * 100)}%` : '';
       const nums = [pct, fmtLeft(p.eta)].filter(Boolean).map(s => ` · ${s}`).join('');
       return {
@@ -275,6 +276,8 @@ function statusOf(g) {
       if (g.out_of_date) return { text: 'Ready', act: 'build', detail: 'Your version is out of date, consider rebuilding', detailCls: 'warn' };
       if (g.newer > 0) return { text: 'Ready', detail: `${g.newer.toLocaleString()} newer nxnative change${g.newer === 1 ? '' : 's'}` };
       return { text: 'Ready' };
+    case 'nxplay':
+      return { text: 'Built in NX Play', act: 'build', detail: "Build once to play it here. It reuses NX Play's files and brings your save." };
     default:
       return { text: 'Not built', act: 'build' };
   }

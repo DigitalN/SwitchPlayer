@@ -36,6 +36,10 @@ _Avoid_: cancel, abort
 The choices nxnative offers for one Build of one Game, left at nxnative's defaults unless the player sets them.
 _Avoid_: settings, pack options
 
+**Built in NX Play**:
+A Game that NX Play built with nxnative's developer path: its build folder is there, with NX Play's own files, but there's no Game app to Play until Switch Player Builds one.
+_Avoid_: build incomplete, half-built
+
 **Out of date**:
 A Game app that nxnative has since changed something for specifically (that Game's own files, or anything that remakes its shaders), or whose Game folder has gained files since its Build. Other newer nxnative changes are counted, not warned about.
 _Avoid_: stale, old

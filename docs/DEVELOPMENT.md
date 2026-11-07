@@ -18,6 +18,10 @@ scripts/build.sh
 
 The path is printed on success. Builds go to `~/Library/Caches/SwitchPlayer-build`, not the repository: this repo is in an iCloud-synced folder, whose Finder metadata can make `codesign` fail. The script clears extended attributes before signing. `scripts/build.sh --adhoc` makes a local build that cannot update itself. Set `SWITCHPLAYER_BUILD_DIR` to use another temporary build folder.
 
+The app icon's source is `Application Files/SwitchPlayer.svg`. After changing it, run `scripts/make_icon.py` with the framework Python: WebKit renders it (a window opens for a few seconds), then it writes `Application Files/SwitchPlayer.icns`, which the app bundle uses, and `docs/images/icon.png` for the README.
+
+The README's screenshots come from the page preview's `readme` scenario (`?s=readme,light`), which holds a Build still part-way.
+
 `SWITCHPLAYER_DATA_DIR` isolates app data, logs and save migration. Never run a real Build, Play a game or open the native app as part of routine development. Use the page preview and simulated services instead.
 
 ## Release checklist

@@ -33,6 +33,7 @@ def test_scans_like_the_maintainers_library(tmp_path):
     zelda.mkdir()
     (zelda / "The Legend of Zelda Echoes of Wisdom [01008CF01BAAC000][v0][US].xci").touch()
     (zelda / f"{ZELDA}_build" / "run" / "save").mkdir(parents=True)
+    (zelda / f"{ZELDA}_build" / "start_mac.sh").touch()  # NX Play built it with nxnative's developer path
     rhythm = tmp_path / "Rhythm Heaven"
     (rhythm / f"{RHYTHM}_build").mkdir(parents=True)
     (rhythm / "Rhythm Heaven Groove.nsp").touch()
@@ -45,6 +46,10 @@ def test_scans_like_the_maintainers_library(tmp_path):
     assert games["Echoes of Wisdom"].title_id == ZELDA and games["Echoes of Wisdom"].nxplay_save
     assert games["Rhythm Heaven"].title_id == RHYTHM and not games["Rhythm Heaven"].nxplay_save
     assert games["Rhythm Heaven"].app is None
+    assert games["Rhythm Heaven"].build_folder == rhythm / f"{RHYTHM}_build"
+    assert games["Echoes of Wisdom"].nxplay_save_path() == zelda / f"{ZELDA}_build" / "run" / "save"
+    assert games["Echoes of Wisdom"].nxplay_build
+    assert not games["Rhythm Heaven"].nxplay_build  # a build folder alone could be Switch Player's own
 
 
 def test_the_name_is_the_games_own(tmp_path):

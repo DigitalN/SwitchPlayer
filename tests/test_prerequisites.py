@@ -15,7 +15,6 @@ class System:
         brew.touch()
         brew.chmod(0o755)
         monkeypatch.setattr(prerequisites, "_brew", lambda: str(brew))
-        monkeypatch.setattr(nxnative.Environment, "ready", lambda self: True)
 
     def run(self, argv, timeout=60):
         self.calls.append(argv)
@@ -38,11 +37,11 @@ class System:
 def test_ready_mac_reports_all_prerequisites(tmp_path, monkeypatch):
     system = System(tmp_path, monkeypatch)
 
-    result = prerequisites.check(tmp_path / "environment", run=system.run)
+    result = prerequisites.check(run=system.run)
 
     assert result["ready"] is True
     assert all(item["ready"] for item in result["items"])
-    assert {item["id"] for item in result["items"]} == {"mac", "xcode", "metal", "tools", "python"}
+    assert {item["id"] for item in result["items"]} == {"mac", "xcode", "metal", "tools"}
 
 
 def test_macos_must_meet_the_nxnative_minimum(tmp_path, monkeypatch):
@@ -53,7 +52,7 @@ def test_macos_must_meet_the_nxnative_minimum(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(argv, 0, "26.5\n", "")
         return system.run(argv)
 
-    result = prerequisites.check(tmp_path / "environment", run=old_mac)
+    result = prerequisites.check(run=old_mac)
 
     mac = next(item for item in result["items"] if item["id"] == "mac")
     assert mac["ready"] is False
@@ -68,7 +67,7 @@ def test_missing_tools_offer_one_homebrew_install_action(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(argv, 1, "", "dependencies missing\n")
         return system.run(argv)
 
-    result = prerequisites.check(tmp_path / "environment", run=missing)
+    result = prerequisites.check(run=missing)
 
     assert result["ready"] is False
     tools = next(item for item in result["items"] if item["id"] == "tools")

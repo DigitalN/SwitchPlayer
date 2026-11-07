@@ -52,6 +52,38 @@ def test_library_returns_the_page_contract_for_an_unbuilt_game(tmp_path):
     }
 
 
+@pytest.mark.parametrize("nxplay_file", ["start_mac.sh", "nxplay-settings.json"])
+def test_library_marks_a_game_nxplay_built(tmp_path, nxplay_file):
+    tid = "0100D9F01D474000"
+    folder = tmp_path / "Switch Games" / "Rhythm Heaven"
+    (folder / f"{tid}_build").mkdir(parents=True)
+    (folder / f"{tid}_build" / nxplay_file).touch()
+    (folder / f"Rhythm Heaven [{tid}].nsp").touch()
+    app = main.SwitchPlayerApp(
+        data_dir=tmp_path / "data",
+        first_launch=lambda: {"library_folder": str(folder.parent)},
+    )
+
+    game = main.Api(app).library()["games"][0]
+
+    assert game["state"] == "nxplay"
+    assert game["app"] is False
+
+
+def test_a_build_folder_nxplay_did_not_write_is_not_built(tmp_path):
+    """A Switch Player Build stopped or failed part-way leaves the same <title ID>_build folder."""
+    tid = "0100D9F01D474000"
+    folder = tmp_path / "Switch Games" / "Rhythm Heaven"
+    (folder / f"{tid}_build" / "extract").mkdir(parents=True)
+    (folder / f"Rhythm Heaven [{tid}].nsp").touch()
+    app = main.SwitchPlayerApp(
+        data_dir=tmp_path / "data",
+        first_launch=lambda: {"library_folder": str(folder.parent)},
+    )
+
+    assert main.Api(app).library()["games"][0]["state"] == "none"
+
+
 def test_titledb_supplies_the_name_and_art(tmp_path):
     tid = "0100D9F01D474000"
     folder = tmp_path / "Switch Games" / "Rhythm Heaven"
@@ -138,9 +170,12 @@ class FakeNative:
     def game_running(self, game):
         return False
 
-    def confirm(self, message, action="Quit"):
-        self.calls.append(("confirm", message, action))
+    def confirm(self, message, action="Quit", detail=""):
+        self.calls.append(("confirm", message, action, detail))
         return self.answer
+
+    def alert(self, title, message):
+        self.calls.append(("alert", title, message))
 
     def open_app(self, path, no_launcher):
         self.calls.append(("open", Path(path), no_launcher))
@@ -215,6 +250,9 @@ def test_build_prepares_the_isolated_nxnative_script_and_environment(tmp_path, m
     keys.touch()
     prepared = []
     monkeypatch.setattr(nxnative.Environment, "ensure", lambda self: prepared.append(self.folder))
+    stages = []
+    monkeypatch.setattr(nxnative.Environment, "ready",
+                        lambda self: stages.append(main.Api(app).library()["games"][0]["progress"]) or False)
 
     class BuildNative(FakeNative):
         def prevent_sleep(self):
@@ -259,6 +297,7 @@ def test_build_prepares_the_isolated_nxnative_script_and_environment(tmp_path, m
         "-k", str(keys), "--flag", "two words",
     ]
     assert prepared == [data / "nxnative-python"]
+    assert stages == [{"preparing": "Updating nxnative"}]
     assert (save_root / tid / "save" / "progress").read_text() == "NX Play"
     assert (source / "progress").read_text() == "NX Play"
     assert (folder / "Rhythm Heaven Groove.app" / "Contents" / "Info.plist").is_file()
@@ -377,8 +416,8 @@ def test_window_close_reopen_and_busy_quit(tmp_path):
     assert app.application_should_terminate() is True
     assert builder.stop_all_calls == 2
     assert native.calls == [
-        ("confirm", "Stop the Build and quit?", "Quit"),
-        ("confirm", "Stop the Build and quit?", "Quit"),
+        ("confirm", "Stop the Build and quit?", "Quit", ""),
+        ("confirm", "Stop the Build and quit?", "Quit", ""),
     ]
 
 
@@ -439,6 +478,10 @@ def test_run_wires_the_real_page_to_a_private_pywebview_window(tmp_path):
     class Window:
         def __init__(self):
             self.events = Events()
+            self.scripts = []
+
+        def evaluate_js(self, script):
+            self.scripts.append(script)
 
     class MenuAction:
         def __init__(self, title, action):
@@ -495,10 +538,11 @@ def test_run_wires_the_real_page_to_a_private_pywebview_window(tmp_path):
     assert menu.title == "__app__"
     assert [item.title for item in menu.items] == [
         "Choose Library Folder…", "Choose Keys File…", "Build Setup…", "Check for Updates…",
-        "Check for nxnative Changes Now",
+        "Check for nxnative Updates…",
     ]
     menu.items[3].action()
     assert native.calls[-1] == ("check updates",)
+    assert menu.items[4].action == app.check_nxnative
 
 
 def test_page_library_choice_uses_the_native_dispatcher(tmp_path):
@@ -583,18 +627,63 @@ def test_save_import_shows_dates_backs_up_and_copies_only_after_confirmation(tmp
     assert api.import_nxplay_save("Rhythm Heaven") is False
     assert (destination / "current").read_text() == "Switch Player"
     assert len(native.calls) == 1
-    assert native.calls[0][0] == "confirm"
-    assert native.calls[0][2] == "Import"
-    assert "NX Play save:" in native.calls[0][1]
-    assert "Current save:" in native.calls[0][1]
+    kind, question, action, detail = native.calls[0]
+    assert (kind, question, action) == ("confirm", "Import the NX Play save for Rhythm Heaven?", "Import")
+    assert "NX Play save:" in detail
+    assert "Current save:" in detail
 
     native.answer = True
+    native.calls.clear()
     assert api.import_nxplay_save("Rhythm Heaven") is True
     assert (destination / "progress").read_text() == "NX Play"
     backups = list((support / tid / "save-backups").iterdir())
     assert len(backups) == 1
     assert backups[0].name.endswith(" before NX Play import")
     assert (backups[0] / "current").read_text() == "Switch Player"
+    assert native.calls[-1] == ("alert", "NX Play save imported", f"Your previous save was backed up to {backups[0]}.")
+
+
+def test_save_import_dialogs_run_on_the_main_thread(tmp_path):
+    """pywebview calls the API on its own threads; AppKit only makes windows on the main one."""
+    import threading
+    tid = "0100D9F01D474000"
+    folder = tmp_path / "Switch Games" / "Rhythm Heaven"
+    source = folder / f"{tid}_build" / "run" / "save"
+    source.mkdir(parents=True)
+    (source / "progress").write_text("NX Play")
+    (folder / f"Rhythm Heaven [{tid}].nsp").touch()
+    threads = []
+
+    class ThreadNative(FakeNative):
+        def confirm(self, message, action="Quit", detail=""):
+            threads.append(threading.current_thread())
+            return True
+
+        def alert(self, title, message):
+            threads.append(threading.current_thread())
+
+    main_queue = []
+    app = main.SwitchPlayerApp(
+        data_dir=tmp_path / "data",
+        first_launch=lambda: {"library_folder": str(folder.parent)},
+        native=ThreadNative(),
+        dispatch=lambda function, *args: main_queue.append((function, args)),
+        save_root=tmp_path / "nxnative-support",
+    )
+    api = main.Api(app)
+    api.library()
+    result = []
+    worker = threading.Thread(target=lambda: result.append(api.import_nxplay_save("Rhythm Heaven")))
+    worker.start()
+    deadline = time.monotonic() + 5
+    while worker.is_alive() and time.monotonic() < deadline:
+        while main_queue:
+            function, args = main_queue.pop(0)
+            function(*args)
+        time.sleep(0.01)
+
+    assert result == [True]
+    assert threads == [threading.main_thread(), threading.main_thread()]
 
 
 def test_save_import_refuses_while_the_game_is_running(tmp_path):
@@ -616,11 +705,12 @@ def test_save_import_refuses_while_the_game_is_running(tmp_path):
     api.library()
 
     assert api.import_nxplay_save("Rhythm Heaven") is False
-    assert native.calls == []
+    assert native.calls == [("alert", "Quit Rhythm Heaven first",
+                             "Switch Player can't replace a save while its game is running.")]
     assert not (support / tid / "save").exists()
 
 
-def test_save_import_does_not_offer_a_missing_source(tmp_path):
+def test_save_import_is_not_offered_without_an_nxplay_save(tmp_path):
     tid = "0100D9F01D474000"
     folder = tmp_path / "Switch Games" / "Rhythm Heaven"
     folder.mkdir(parents=True)
@@ -637,11 +727,32 @@ def test_save_import_does_not_offer_a_missing_source(tmp_path):
         save_root=support,
     )
     api = main.Api(app)
-    api.library()
 
+    assert api.library()["games"][0]["nxplay_save"] is False
     assert api.import_nxplay_save("Rhythm Heaven") is False
     assert native.calls == []
     assert (destination / "current").read_text() == "Switch Player"
+
+
+def test_save_import_finds_a_nup_games_save_beside_the_file(tmp_path):
+    tid = "0100D9F01D474000"
+    game_id = f"Rhythm Heaven [{tid}].nup"
+    (tmp_path / game_id).touch()
+    source = tmp_path / f"{tid}_build" / "run" / "save"
+    source.mkdir(parents=True)
+    (source / "progress").write_text("NX Play")
+    support = tmp_path / "nxnative-support"
+    app = main.SwitchPlayerApp(
+        data_dir=tmp_path / "data",
+        first_launch=lambda: {"library_folder": str(tmp_path)},
+        native=FakeNative(),
+        save_root=support,
+    )
+    api = main.Api(app)
+    api.library()
+
+    assert api.import_nxplay_save(game_id) is True
+    assert (support / tid / "save" / "progress").read_text() == "NX Play"
 
 
 def test_library_reports_freshness_after_a_background_fetch(tmp_path, monkeypatch):
@@ -705,6 +816,65 @@ def test_freshness_refreshes_daily_or_on_demand(tmp_path, monkeypatch):
     assert calls == ["fetch", "fetch", "fetch"]
 
 
+def built_game(folder, tid, name):
+    contents = folder / name / f"{name}.app" / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({"DMTitleID": tid, "CFBundleDisplayName": name}))
+
+
+def test_nxnative_check_answers_like_the_app_update_check(tmp_path, monkeypatch):
+    zelda, rhythm, mario = "01008CF01BAAC000", "0100D9F01D474000", "0100965017338000"
+    library_folder = tmp_path / "Switch Games"
+    library_folder.mkdir()
+    native = FakeNative()
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=lambda: {"library_folder": str(library_folder)},
+                               native=native)
+
+    assert app._nxnative_report() == ("No games built in Switch Player yet",
+                                      "Your first Build will use the latest nxnative.")
+
+    built_game(library_folder, zelda, "Echoes of Wisdom")
+    built_game(library_folder, rhythm, "Rhythm Heaven Groove")
+    built_game(library_folder, mario, "Super Mario Party Jamboree")
+    app._last_scan = None
+    answers = {zelda: {"out_of_date": False, "newer": 0}, rhythm: {"out_of_date": False, "newer": 0},
+               mario: {"out_of_date": False, "newer": 0}}
+    monkeypatch.setattr(nxnative.Copy, "freshness", lambda self, apps: answers)
+    assert app._nxnative_report() == ("Your games are up to date with nxnative",
+                                      "Your next Build will use the latest nxnative.")
+
+    answers[zelda] = {"out_of_date": True, "newer": 3}
+    answers[rhythm] = {"out_of_date": False, "newer": 1200}
+    assert app._nxnative_report() == (
+        "nxnative has changes for 2 games",
+        "Out of date, consider rebuilding: Echoes of Wisdom. "
+        "Newer changes that don't need a rebuild: Rhythm Heaven Groove (1,200).",
+    )
+    assert app._freshness == answers
+
+    def fail(self, apps):
+        raise nxnative.NxnativeError("Couldn't reach GitHub.")
+
+    monkeypatch.setattr(nxnative.Copy, "freshness", fail)
+    assert app._nxnative_report() == ("Switch Player couldn't check nxnative", "Couldn't reach GitHub.")
+
+
+def test_nxnative_check_menu_alerts_from_the_main_thread(tmp_path, monkeypatch):
+    import threading
+    native = FakeNative()
+    dispatched = []
+    app = main.SwitchPlayerApp(data_dir=tmp_path, first_launch=dict, native=native,
+                               dispatch=lambda function, *args: dispatched.append((function, args)))
+    monkeypatch.setattr(app, "_nxnative_report", lambda: ("Title", "Message"))
+
+    app.check_nxnative()
+    for thread in threading.enumerate():
+        if thread.name == "nxnative-check":
+            thread.join(5)
+
+    assert dispatched == [(native.alert, ("Title", "Message"))]
+
+
 def test_wake_observation_uses_the_native_notification_center(monkeypatch):
     calls = []
     observer = object()
@@ -748,7 +918,7 @@ def test_wake_observation_uses_the_native_notification_center(monkeypatch):
 
 def test_setup_is_read_only_until_the_player_installs_tools(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(main.prerequisites, "check", lambda environment: {
+    monkeypatch.setattr(main.prerequisites, "check", lambda: {
         "ready": False,
         "items": [{"id": "tools", "name": "Build tools", "ready": False,
                    "detail": "Homebrew tools are missing.", "action": "install"}],

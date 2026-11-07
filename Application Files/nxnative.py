@@ -123,30 +123,27 @@ class Copy:
         result = {app.title_id: {"out_of_date": False, "newer": 0} for app in apps if app}
         if not result:
             return result
-        try:
-            if self.own:
-                self.fetch()
-            target = self._upstream_head() if self.own else "HEAD"
-            for app in apps:
-                if not app or not app.commit:
-                    continue
-                if app.commit.endswith("+dirty"):
-                    result[app.title_id]["out_of_date"] = True
-                    continue
-                base = git(self.path, "rev-parse", "--verify", "--quiet", f"{app.commit}^{{commit}}", timeout=30)
-                newer = int(git(self.path, "rev-list", "--count", f"{base}..{target}", timeout=60))
-                changed = bool(git(self.path, "log", "--format=%H", "-1", f"{base}..{target}", "--",
-                                   f"dm/games/{app.title_id}", timeout=60))
-                try:
-                    chain = git(self.path, "show", f"{target}:dm/gfx/nvn/dmsh_chain.h", timeout=30)
-                except NxnativeError:
-                    chain = ""
-                current_chain = next((line.split('"')[1] for line in chain.splitlines()
-                                      if line.startswith('#define DMSH_CHAIN "')), None)
-                out_of_date = changed or (current_chain is not None and current_chain != app.chain)
-                result[app.title_id] = {"out_of_date": out_of_date, "newer": newer}
-        except (NxnativeError, ValueError):
-            log.info("Couldn't check nxnative freshness", exc_info=True)
+        if self.own:
+            self.fetch()
+        target = self._upstream_head() if self.own else "HEAD"
+        for app in apps:
+            if not app or not app.commit:
+                continue
+            if app.commit.endswith("+dirty"):
+                result[app.title_id]["out_of_date"] = True
+                continue
+            base = git(self.path, "rev-parse", "--verify", "--quiet", f"{app.commit}^{{commit}}", timeout=30)
+            newer = int(git(self.path, "rev-list", "--count", f"{base}..{target}", timeout=60))
+            changed = bool(git(self.path, "log", "--format=%H", "-1", f"{base}..{target}", "--",
+                               f"dm/games/{app.title_id}", timeout=60))
+            try:
+                chain = git(self.path, "show", f"{target}:dm/gfx/nvn/dmsh_chain.h", timeout=30)
+            except NxnativeError:
+                chain = ""
+            current_chain = next((line.split('"')[1] for line in chain.splitlines()
+                                  if line.startswith('#define DMSH_CHAIN "')), None)
+            out_of_date = changed or (current_chain is not None and current_chain != app.chain)
+            result[app.title_id] = {"out_of_date": out_of_date, "newer": newer}
         return result
 
 

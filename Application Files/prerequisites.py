@@ -4,7 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from nxnative import Environment, NxnativeError
+from nxnative import NxnativeError
 
 
 def _run(argv, timeout=60):
@@ -22,7 +22,7 @@ def _brew():
     return None
 
 
-def check(environment, run=_run):
+def check(run=_run):
     """What a Build needs, with manual Xcode instructions separate from the install action."""
     items = []
     mac = run(["/usr/bin/uname", "-m"])
@@ -62,11 +62,6 @@ def check(environment, run=_run):
                   "Homebrew tools are missing." if brew else "Install Homebrew from https://brew.sh first.",
                   "action": "install" if brew and not tools_ready else None})
 
-    python_ready = Environment(environment, Path(__file__).parent / "nxnative-python" / "pyproject.toml").ready()
-    items.append({"id": "python", "name": "Python packages", "ready": python_ready,
-                  "detail": "Switch Player's Python environment is ready." if python_ready else
-                  "Switch Player will install its own Python packages before the first Build.",
-                  "action": None})
     return {"ready": all(item["ready"] for item in items), "items": items}
 
 

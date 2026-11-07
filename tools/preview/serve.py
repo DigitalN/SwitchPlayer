@@ -7,8 +7,8 @@ in Claude's browser pane). The page is rebuilt from Application Files/index.html
 on every load, so a reload shows the latest edit. Query options are listed at the top of
 stub.js.
 
-The games are the Library folder's (SWITCHPLAYER_PREVIEW_LIBRARY, or NX Play's
-~/Downloads/Switch Games), found and named by the app's own library.py and titledb.py, so
+The games are the Library folder's (SWITCHPLAYER_PREVIEW_LIBRARY, or the maintainer's
+~/Switch Games), found and named by the app's own library.py and titledb.py, so
 they can't drift from it. The names and art titledb.py downloads (the eShop's title list once,
 then each game's icon from Nintendo's CDN) are kept in SWITCHPLAYER_DATA_DIR, or
 tools/preview/.data, not in the app's own data folder. The Library folder is only read: nothing
@@ -27,7 +27,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 APP_DIR = HERE.parent.parent / "Application Files"
-LIBRARY = Path(os.environ.get("SWITCHPLAYER_PREVIEW_LIBRARY", "~/Downloads/Switch Games")).expanduser()
+LIBRARY = Path(os.environ.get("SWITCHPLAYER_PREVIEW_LIBRARY", "~/Switch Games")).expanduser()
 DATA_DIR = Path(os.environ.get("SWITCHPLAYER_DATA_DIR", HERE / ".data")).expanduser()
 sys.path.insert(0, str(APP_DIR))
 
@@ -48,7 +48,8 @@ def games():
     db = titledb.TitleDB(DATA_DIR / "titledb")
     db.update([g.title_id for g in found if not db.art(g.title_id) or not db.name(g.title_id)])
     games = [{"id": g.id, "name": g.name(db.name(g.title_id)), "title_id": g.title_id,
-              "art_data": art_data(db.art(g.title_id)), "nxplay_save": g.nxplay_save} for g in found]
+              "art_data": art_data(db.art(g.title_id)), "nxplay_save": g.nxplay_save,
+              "nxplay_build": g.nxplay_build} for g in found]
     return sorted(games, key=lambda g: library.sort_key(g["name"]))
 
 

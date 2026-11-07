@@ -4,7 +4,7 @@
 // second standing for a minute.
 //
 // Query options, combined with commas: ?s=building,dark
-//   library: (default: as it is now, nothing built yet) building ready failed noart many empty nofolder
+//   library: (default: as it is now, nothing built yet) building ready failed noart many empty nofolder readme
 //   theme:   dark light
 // Change window.__state while it runs to try anything else; the next poll picks it up.
 // window.__state.calls is every API call the page made. Page errors that the app would log
@@ -13,7 +13,7 @@
   const app = window.__app;
   const fresh = g => ({
     id: g.id, name: g.name, title_id: g.title_id, art: g.art_data ? `${g.title_id}:1` : null,
-    state: 'none', app: false, progress: null, error: null, out_of_date: false, newer: 0,
+    state: g.nxplay_build ? 'nxplay' : 'none', app: false, progress: null, error: null, out_of_date: false, newer: 0,
     log: false, nxplay_save: g.nxplay_save, options: '',
   });
   const state = window.__state = {
@@ -38,6 +38,7 @@
     g.progress = { k, n: STAGES.length, name, step: '', frac: uncounted ? null : frac, eta: null, secs, done: frac * secs, uncounted };
   }
   function tick() {
+    if (state.still) return;  // the readme scenario holds its Build still for screenshots
     const g = state.games.find(x => x.state === 'building');
     if (!g || !g.progress) return;  // starting; its first stage comes in a moment
     const p = g.progress;
@@ -80,6 +81,15 @@
       Object.assign(at(1), { state: 'stopped' });
       Object.assign(at(2), { state: 'failed', app: true, log: true, error: "captured shaders the profile's shader table does not list: 3" });
     },
+    // The README's screenshots: one of each state a player meets first, held still.
+    readme: () => {
+      state.still = true;
+      const named = name => state.games.find(g => g.name.includes(name)) || {};
+      Object.assign(named('Echoes'), { state: 'building' }); startStage(named('Echoes'), 9, 0.42);
+      named('Echoes').progress && Object.assign(named('Echoes').progress, { done: 0.42 * 8, eta: 280 });
+      Object.assign(named('Rhythm'), { state: 'ready', app: true, log: true, newer: 12 });
+      Object.assign(named('Jamboree'), { state: 'nxplay' });
+    },
     noart: () => state.games.forEach(g => { g.art = null; }),
     many: () => {
       const base = state.games.slice();
@@ -118,7 +128,7 @@
       const g = game(id);
       if (g.state === 'waiting') {
         state.queue = state.queue.filter(x => x !== id);
-        g.state = g.app ? 'ready' : 'none';
+        g.state = g.app ? 'ready' : fresh(app.games.find(x => x.id === id) || {}).state;
       } else if (g.state === 'building') {
         Object.assign(g, { state: 'stopped', progress: null });
         next();
@@ -132,9 +142,9 @@
         { id: 'xcode', name: 'Xcode', ready: true, detail: 'Xcode is selected and its first launch is complete.', action: null },
         { id: 'metal', name: 'Metal Toolchain', ready: false, detail: 'In Terminal, run: xcodebuild -downloadComponent MetalToolchain', action: null },
         { id: 'tools', name: 'Build tools', ready: false, detail: 'Homebrew tools are missing.', action: 'install' },
-        { id: 'python', name: 'Python packages', ready: false, detail: "Switch Player will install its own Python packages before the first Build.", action: null },
       ],
     }),
+    import_nxplay_save: id => { console.log(`Preview: would ask, then import ${game(id).name}'s NX Play save`); return true; },
     install_tools: () => { console.log('Preview: would install the Brewfile tools'); return true; },
     log_error: message => console.error('Page error:', message),
   };
