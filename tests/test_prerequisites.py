@@ -11,6 +11,7 @@ class System:
         self.tmp_path = tmp_path
         self.calls = []
         self.envs = []
+        self.extra = {}
         brew = tmp_path / "homebrew" / "brew"
         brew.parent.mkdir()
         brew.touch()
@@ -29,6 +30,7 @@ class System:
             ("/usr/bin/xcrun", "metal"): "Apple metal version 4.0\n",
             ("/usr/local/share/dotnet/dotnet", "--list-sdks"): "10.0.100 [/usr/local/share/dotnet/sdk]\n",
         }
+        outputs.update(self.extra)
         if command in outputs:
             return subprocess.CompletedProcess(argv, 0, outputs[command], "")
         if argv[0].endswith("/brew") and argv[1] == "bundle":
@@ -107,7 +109,7 @@ def test_the_dotnet_sdk_is_a_manual_line_with_the_command_to_run(tmp_path, monke
     system = System(tmp_path, monkeypatch)
 
     def no_sdk(argv, **kwargs):
-        if argv[:2] == [prerequisites.DOTNET, "--list-sdks"]:
+        if argv[1:] == ["--list-sdks"]:
             return subprocess.CompletedProcess(argv, 0, "", "")  # a runtime alone lists no SDK
         return system.run(argv, **kwargs)
 
@@ -123,6 +125,24 @@ def test_the_dotnet_sdk_is_a_manual_line_with_the_command_to_run(tmp_path, monke
 
     found = {item["id"]: item for item in prerequisites.check(run=system.run)["items"]}
     assert found["dotnet"]["ready"] is True and "10.0.100" in found["dotnet"]["detail"]
+
+
+def test_a_dotnet_sdk_from_the_homebrew_formula_counts(tmp_path, monkeypatch):
+    """A Build's PATH has /opt/homebrew/bin, where the `dotnet` formula puts it, as well as the
+    folder Microsoft's installer (the cask) uses."""
+    system = System(tmp_path, monkeypatch)
+    system.extra = {("/opt/homebrew/bin/dotnet", "--list-sdks"): "9.0.300 [/opt/homebrew/opt/dotnet/libexec/sdk]\n"}
+
+    def formula_only(argv, **kwargs):
+        if argv == ["/usr/local/share/dotnet/dotnet", "--list-sdks"]:
+            return subprocess.CompletedProcess(argv, 1, "", "No such file")
+        return system.run(argv, **kwargs)
+
+    result = prerequisites.check(run=formula_only)
+    sdk = next(item for item in result["items"] if item["id"] == "dotnet")
+
+    assert sdk["ready"] is True and "9.0.300" in sdk["detail"]
+    assert result["ready"] is True
 
 
 def test_install_allows_time_for_homebrew_and_reports_failures(tmp_path, monkeypatch):

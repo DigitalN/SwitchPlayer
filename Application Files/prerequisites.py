@@ -10,9 +10,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from nxnative import NxnativeError
+from nxnative import TOOL_PATHS, NxnativeError
 
-DOTNET = "/usr/local/share/dotnet/dotnet"  # where the Microsoft installer puts it, and where a Build looks
 DOTNET_COMMAND = "brew install --cask dotnet-sdk"
 BREW_ENV = {"HOMEBREW_BUNDLE_CASK_SKIP": "dotnet-sdk"}  # the Brewfile's cask: see above
 BREWFILE = Path(__file__).parent / "Brewfile"
@@ -66,8 +65,14 @@ def check(run=_run):
                   "In Terminal, run: xcodebuild -downloadComponent MetalToolchain",
                   "action": None})
 
-    sdks = run([DOTNET, "--list-sdks"])
-    sdk_lines = sdks.stdout.strip().splitlines() if sdks.returncode == 0 else []
+    # In the folders a Build's PATH has: Homebrew's `dotnet` formula and Microsoft's installer
+    # (the cask) put it in different ones, and either builds.
+    sdk_lines = []
+    for folder in TOOL_PATHS:
+        sdks = run([f"{folder}/dotnet", "--list-sdks"])
+        sdk_lines = sdks.stdout.strip().splitlines() if sdks.returncode == 0 else []
+        if sdk_lines:
+            break
     items.append({"id": "dotnet", "name": ".NET SDK", "ready": bool(sdk_lines),
                   "detail": f".NET SDK {sdk_lines[-1].split()[0]} is installed." if sdk_lines else
                   f"In Terminal, run: {DOTNET_COMMAND} (it asks for your password)",

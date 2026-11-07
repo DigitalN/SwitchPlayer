@@ -169,6 +169,7 @@ class Updater:
         self._wake_observer = None
         self._check_pending = False
         self._install_timer = None
+        self._install_asked = False  # the player asked for the update held for a Build: only the Build holds it
         self.unavailable_reason = self._why_unavailable()
 
     def _why_unavailable(self):
@@ -298,6 +299,8 @@ class Updater:
         if self.status != READY:
             self._stop_install_timer()
             return
+        self._install_asked = self._install_asked or user_initiated  # the retries below remember it
+        user_initiated = self._install_asked
         busy = self._is_busy()
         idle = Quartz.CGEventSourceSecondsSinceLastEventType(
             Quartz.kCGEventSourceStateCombinedSessionState, Quartz.kCGAnyInputEventType)
@@ -312,6 +315,7 @@ class Updater:
             _alert(f"Switch Player {self.version} is ready", "It will install once the Build ends.")
 
     def _stop_install_timer(self):
+        self._install_asked = False
         if self._install_timer is not None:
             self._install_timer.invalidate()
             self._install_timer = None

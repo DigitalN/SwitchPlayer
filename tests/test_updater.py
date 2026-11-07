@@ -108,9 +108,15 @@ class MainThreadUpdate:
         class Timer:
             calls = []
 
+            blocks = []
+
             def scheduledTimerWithTimeInterval_repeats_block_(self, interval, repeats, block):
                 self.calls.append(interval)
-                return "timer"
+                self.blocks.append(block)
+                return self
+
+            def invalidate(self):
+                pass
 
         class Events:
             @staticmethod
@@ -153,6 +159,35 @@ def test_check_for_updates_installs_at_once_when_nothing_is_building(monkeypatch
     now.update._install_if_quiet(True)
 
     assert now.installed == [True] and now.alerts == []
+
+
+def test_an_update_held_for_a_build_installs_when_the_build_ends_without_waiting_for_a_quiet_mouse(monkeypatch):
+    """The alert says "once the Build ends", so the retries remember the player asked."""
+    busy = [True]
+    held = MainThreadUpdate(monkeypatch, busy=True, idle=0)  # they keep using the Mac
+    held.update._is_busy = lambda: busy[0]
+
+    held.update._install_if_quiet(True)
+    retry = held.timer.blocks[0]
+    retry(None)  # the Build is still running
+    assert held.installed == []
+
+    busy[0] = False
+    retry(None)  # 30 s on, the Build has ended; the player is still typing
+
+    assert held.installed == [True]
+
+
+def test_an_automatic_hold_still_waits_for_a_quiet_mouse_after_the_build(monkeypatch):
+    busy = [True]
+    held = MainThreadUpdate(monkeypatch, busy=True, idle=3)
+    held.update._is_busy = lambda: busy[0]
+
+    held.update._install_if_quiet()
+    busy[0] = False
+    held.timer.blocks[0](None)
+
+    assert held.installed == []  # nobody asked: it waits for ten quiet seconds as well
 
 
 def test_an_automatic_install_still_waits_for_a_quiet_keyboard_and_mouse(monkeypatch):

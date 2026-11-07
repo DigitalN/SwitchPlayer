@@ -4,7 +4,7 @@ Switch Player's first priority is that nxnative stays the easiest thing to updat
 
 So Switch Player uses only what nxnative documents for front ends (`docs/frontends.md`): the build script's command line, its `--progress json` events and exit codes, and each Game app's `Info.plist`, `launcher.json` and saved choices. Anything more it needs goes to nxnative as a pull request, never as a workaround here. Every nxnative internal Switch Player relied on would bring back the wait for an Switch Player release, as it did for NX Play.
 
-One exception, and only while that pull request is open: Switch Player may read an undocumented nxnative detail where a failure could only change what Switch Player shows, never a Build or Play.
+One exception, and only until that pull request is merged, whether or not it has been opened yet: Switch Player may read an undocumented nxnative detail where a failure could only change what Switch Player shows, never a Build or Play. (Amended 2026-11-07: this said "only while that pull request is open", which nothing met while the pull request was still to be written.)
 
 ## Considered options
 

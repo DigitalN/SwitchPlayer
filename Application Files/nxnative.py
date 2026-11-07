@@ -16,7 +16,7 @@ Only nxnative's documented front-end contract is used (docs/frontends.md, ADR 00
 script's command line. Whichever Xcode macOS has selected builds; nxnative's own error says
 when it needs another.
 
-One exception, ADR 0001's, while its pull request is unopened or open (the fourth in
+One exception, ADR 0001's, until its pull request is merged, opened yet or not (the fourth in
 docs/DESIGN.md): the Out of date check (Copy.freshness) reads details docs/frontends.md doesn't
 document yet: the `DMCommit` and `DMChain` a Game app records, the `dm/games/<title ID>` folder
 that holds each game's own files, and the shader version `DMSH_CHAIN` in
@@ -77,6 +77,7 @@ class Copy:
         self.path = Path(path)
         self.own = own
         self._upstream = upstream
+        self.fetch_error = None  # why freshness() couldn't fetch upstream's latest, when it couldn't
 
     @property
     def script(self):
@@ -164,14 +165,22 @@ class Copy:
         result = {app.title_id: {"out_of_date": False, "newer": 0} for app in apps if app}
         if not result:
             return result
+        self.fetch_error = None
         if self.own:
-            self.fetch()
+            try:
+                self.fetch()
+            except NxnativeError as e:  # offline, or GitHub is down: compare with what's already fetched
+                self.fetch_error = str(e)
+                log.info("Out of date check: couldn't fetch nxnative (%s); comparing with what was fetched before", e)
         target = self._upstream_head() if self.own else "HEAD"
         for app in apps:
             if not app or not app.commit:
                 continue
-            # `+dirty`: nxnative's checkout had uncommitted edits. They can't be compared, so it's
-            # compared from the commit they were on; a Build from the same checkout clears it.
+            # `+dirty`: nxnative's checkout had uncommitted edits, which can't be compared, so it's
+            # counted from the commit under them. Only counted: nxnative's packer reuses a Game app
+            # whose inputs haven't changed and keeps its old DMCommit, so a Build from the same
+            # checkout couldn't always clear a yellow line (#20).
+            dirty = app.commit.endswith("+dirty")
             base = self._known_commit(app.commit.removesuffix("+dirty"))
             if base is None:  # built from a commit this copy hasn't got: a missing detail for this game alone
                 log.info("%s was built from nxnative %s, which this copy doesn't have", app.title_id, app.commit)
@@ -185,9 +194,10 @@ class Copy:
                 chain = ""
             current_chain = next((line.split('"')[1] for line in chain.splitlines()
                                   if line.startswith('#define DMSH_CHAIN "')), None)
-            # Vulkan and GL games have no DMChain: with no shader version to compare, only the count shows.
-            out_of_date = changed or (current_chain is not None and app.chain is not None
-                                      and current_chain != app.chain)
+            # A Vulkan or GL game has no DMChain, and with that detail missing only the count shows
+            # (DESIGN.md, pull request 4): not even a change to the game's own files turns it yellow.
+            out_of_date = app.chain is not None and not dirty and (
+                changed or (current_chain is not None and current_chain != app.chain))
             result[app.title_id] = {"out_of_date": out_of_date, "newer": newer}
         return result
 

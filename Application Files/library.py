@@ -5,9 +5,9 @@ files and anything else at the top level are ignored. A Game app is `<game name>
 Game folder, or for a .nup, in the Library folder beside it.
 
 Everything read from a Game app is in nxnative's front-end contract (docs/frontends.md): its
-Info.plist. Two details aren't documented yet and are read under ADR 0001's exception, while
-its pull request (the fourth in docs/DESIGN.md) is unopened or open, because a wrong answer
-could only change what's shown: the `DMCommit` and `DMChain` keys, which only the Out of date
+Info.plist. Two details aren't documented yet and are read under ADR 0001's exception, until
+its pull request (the fourth in docs/DESIGN.md) is merged, opened yet or not, because a wrong
+answer could only change what's shown: the `DMCommit` and `DMChain` keys, which only the Out of date
 check uses (nxnative.py), and the name of the `<title ID>_survey` folder, which keeps a build's
 survey from being taken for a Game folder. Only reads: nothing here writes to the Library folder.
 """

@@ -159,6 +159,7 @@ class SwitchPlayerApp:
         self._freshness_fetch_lock = threading.Lock()
         self._freshness_thread = None
         self._freshness_checked = None
+        self._freshness_offline = None  # why the last check couldn't fetch nxnative, when it couldn't
         self._window = None
         self._caffeinate = None
         self._updater = updater.Updater(launch.bundle_path(), VERSION, self._data_dir,
@@ -363,17 +364,11 @@ class SwitchPlayerApp:
         return {"folder_name": Path(folder).name, "games": result}
 
     def _files_changed(self, game):
-        """Whether the Game folder gained files since the Game app's Build. A Game app built
-        before Switch Player kept records has none: until a Build writes one, it goes by modification
-        dates, and the first time that finds nothing, what the folder holds then is kept as its record."""
-        recorded = self._records.files(game.id)
-        changed = nxnative.game_files_changed(game, recorded)
-        if recorded is None and game.app and not changed:
-            try:
-                self._records.set_files(game.id, nxnative.game_files(game))
-            except OSError:
-                pass
-        return changed
+        """Whether the Game folder gained files since the Game app's Build: by the record that
+        Build wrote (records.py), or, for a Game app built before there were records, by the files'
+        modification dates until its next Build writes one. Never a record made from those dates:
+        it would take a file copied in with an old date for one the Build had used."""
+        return nxnative.game_files_changed(game, self._records.files(game.id))
 
     def _refresh_freshness(self, force=False):
         with self._freshness_lock:
@@ -400,6 +395,7 @@ class SwitchPlayerApp:
             freshness = copy.freshness(apps)
         with self._freshness_lock:
             self._freshness = freshness
+            self._freshness_offline = copy.fetch_error
             self._freshness_checked = time.time()
         return freshness
 
@@ -424,7 +420,13 @@ class SwitchPlayerApp:
                 out_of_date.append(self._game_name(game))
             elif current.get("newer"):
                 newer.append(f"{self._game_name(game)} ({current['newer']:,})")
+        with self._freshness_lock:
+            offline = self._freshness_offline
+        # Offline, the answer is only as new as the last fetch, and says so.
+        stale = f"Switch Player couldn't reach GitHub ({offline}), so this compares with the nxnative it last fetched."
         if not out_of_date and not newer:
+            if offline:
+                return "Switch Player couldn't reach GitHub", f"Compared with the nxnative it last fetched, your games are up to date. ({offline})"
             return "Your games are up to date with nxnative", "Your next Build will use the latest nxnative."
         count = len(out_of_date) + len(newer)
         parts = []
@@ -432,6 +434,8 @@ class SwitchPlayerApp:
             parts.append(f"Out of date, consider rebuilding: {', '.join(out_of_date)}.")
         if newer:
             parts.append(f"Newer changes that don't need a rebuild: {', '.join(newer)}.")
+        if offline:
+            parts.append(stale)
         return f"nxnative has changes for {count} game{'' if count == 1 else 's'}", " ".join(parts)
 
     def _game_name(self, game):

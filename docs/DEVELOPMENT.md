@@ -39,7 +39,7 @@ Switch Player builds with its own clone of nxnative (`~/Library/Application Supp
 
 What changes while it's set:
 
-- Switch Player never fetches, resets or otherwise changes that folder. Builds use whatever is checked out, uncommitted edits included, so a Game app built from edits records a `DMCommit` ending in `+dirty`, and Out of date compares it from the commit under them.
+- Switch Player never fetches, resets or otherwise changes that folder. Builds use whatever is checked out, uncommitted edits included, so a Game app built from edits records a `DMCommit` ending in `+dirty`. Such a game never turns yellow; it shows only the count of newer changes since the commit under the edits.
 - Out of date and **Check for nxnative Updates…** compare built games with that checkout's current commit, without fetching.
 - The folder must already hold `scripts/build_ipa_from_nsp.py`; a Build otherwise fails at once with "There's no nxnative build script in <folder>".
 - Switch Player's own Python environment is still used, with its own package list (`Application Files/nxnative-python/pyproject.toml`), not the checkout's.

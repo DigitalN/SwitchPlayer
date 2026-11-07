@@ -97,9 +97,10 @@ def test_game_files_added_since_the_build_make_it_out_of_date(tmp_path):
     assert nxnative.game_files_changed(game) is True
 
 
-def test_a_dirty_build_is_compared_from_the_commit_it_was_made_on(tmp_path, upstream):
-    """Uncommitted edits can't be compared; the commit under them can. A Build from the same
-    checkout records the same commit again, so it clears the warning instead of keeping it."""
+def test_a_dirty_build_shows_only_the_count_from_the_commit_under_the_edits(tmp_path, upstream):
+    """Uncommitted edits can't be compared. Nor can a Build always clear a yellow line for them:
+    after committing the edit, a second Build reuses the Game app and keeps `X+dirty` (#20), while
+    X..HEAD touches the game's folder. So a +dirty Game app is never yellow."""
     built = upstream.commit("print('built')\n")
     upstream.push()
     copy = nxnative.Copy(tmp_path / "copy", own=True, upstream=str(upstream.bare))
@@ -108,11 +109,11 @@ def test_a_dirty_build_is_compared_from_the_commit_it_was_made_on(tmp_path, upst
 
     assert copy.freshness([app])["0100D9F01D474000"] == {"out_of_date": False, "newer": 0}
 
+    commit_file(upstream, "dm/games/0100D9F01D474000/profile.toml", "the edit, committed\n")
     commit_file(upstream, "dm/host/other.c", "other game\n")
-    commit_file(upstream, "dm/games/0100D9F01D474000/profile.toml", "changed\n")
     upstream.push()
 
-    assert copy.freshness([app])["0100D9F01D474000"] == {"out_of_date": True, "newer": 2}
+    assert copy.freshness([app])["0100D9F01D474000"] == {"out_of_date": False, "newer": 2}
 
 
 def test_a_game_app_without_a_shader_version_shows_only_the_count(tmp_path, upstream):
@@ -125,6 +126,28 @@ def test_a_game_app_without_a_shader_version_shows_only_the_count(tmp_path, upst
     app = game_app(tmp_path, built[:12], chain=None)
 
     assert copy.freshness([app])["0100D9F01D474000"] == {"out_of_date": False, "newer": 1}
+
+    commit_file(upstream, "dm/games/0100D9F01D474000/profile.toml", "changed\n")  # the game's own files too
+    upstream.push()
+
+    assert copy.freshness([app])["0100D9F01D474000"] == {"out_of_date": False, "newer": 2}
+
+
+def test_offline_it_compares_with_what_was_fetched_before(tmp_path, upstream):
+    built = upstream.commit("print('built')\n")
+    upstream.push()
+    copy = nxnative.Copy(tmp_path / "copy", own=True, upstream=str(upstream.bare))
+    copy.update()
+    app = game_app(tmp_path, built[:12])
+    commit_file(upstream, "dm/games/0100D9F01D474000/profile.toml", "changed\n")
+    upstream.push()
+    assert copy.freshness([app])["0100D9F01D474000"] == {"out_of_date": True, "newer": 1} and copy.fetch_error is None
+
+    upstream.bare.rename(tmp_path / "offline.git")  # GitHub can't be reached
+    status = copy.freshness([app])
+
+    assert status == {"0100D9F01D474000": {"out_of_date": True, "newer": 1}}  # as of the last fetch
+    assert copy.fetch_error  # and it says so
 
 
 @pytest.mark.parametrize("commit", ["feedfacefeed", "not a commit", "--output=x"])
