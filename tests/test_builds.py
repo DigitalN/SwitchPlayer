@@ -21,9 +21,10 @@ def game(tmp_path, name, **plan):
 
 
 class Harness:
-    def __init__(self, tmp_path, prepare=None):
+    def __init__(self, tmp_path, prepare=None, on_game=None):
         self.finished = []
         self.busy = []
+        self.games = []
         self.done = threading.Event()
 
         def default_prepare(job):
@@ -34,7 +35,8 @@ class Harness:
             self.done.set()
 
         self.builder = builds.Builder(prepare or default_prepare, tmp_path / "Logs", on_finish=on_finish,
-                                      on_busy=self.busy.append)
+                                      on_busy=self.busy.append,
+                                      on_game=on_game or (lambda job, event: self.games.append((job.game_id, event))))
 
     def wait(self, count, timeout=10):
         end = time.time() + timeout
@@ -64,6 +66,37 @@ def test_a_finished_build(tmp_path):
     assert "── 2/2 Mac shaders" in text and "Exit code 0" in text
     h.until(lambda: h.busy and h.busy[-1] is False)
     assert True in h.busy
+
+
+def test_the_game_event_is_handed_on_while_the_build_runs(tmp_path):
+    """nxnative names the game about a minute in (issue #42): handed on as it comes, once, and
+    left out of the Build log, where the say after it tells people the same."""
+    folder = game(tmp_path, "Ocarina", stages=[["unpack v131072", 0.05], ["Mac shaders", 2]],
+                  game={"title_id": "0400486024DEC000", "name": "The Legend of Zelda: Ocarina of Time", "icon": "/b/icon.jpg"})
+    h = Harness(tmp_path)
+    h.builder.build("Ocarina", folder, "Ocarina")
+    h.until(lambda: h.games)
+    assert h.builder.status("Ocarina")["state"] == "building"  # before the shader stages end
+    [(game_id, event)] = h.games
+    assert game_id == "Ocarina"
+    assert {k: event[k] for k in ("ev", "title_id", "name", "icon")} == {
+        "ev": "game", "title_id": "0400486024DEC000", "name": "The Legend of Zelda: Ocarina of Time", "icon": "/b/icon.jpg"}
+    h.builder.stop("Ocarina")
+    h.wait(1)
+    assert len(h.games) == 1
+    text = h.builder.build_log("Ocarina").read_text()
+    assert "app name: The Legend of Zelda: Ocarina of Time;" in text and '"ev"' not in text
+
+
+def test_a_game_event_the_app_cant_take_doesnt_stop_the_build(tmp_path):
+    def broken(job, event):
+        raise OSError("disk full")
+
+    folder = game(tmp_path, "Ocarina", game={"title_id": "0400486024DEC000", "name": "Zelda"})
+    h = Harness(tmp_path, on_game=broken)
+    h.builder.build("Ocarina", folder, "Ocarina")
+    h.wait(1)
+    assert h.finished == [("Ocarina", True)]
 
 
 def test_a_failed_build_shows_nxnatives_red_message(tmp_path):

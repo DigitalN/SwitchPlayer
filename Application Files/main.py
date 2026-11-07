@@ -3,6 +3,7 @@
 import base64
 import logging
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -22,7 +23,7 @@ import updater
 log = logging.getLogger("switchplayer")
 
 APP_NAME = "Switch Player"
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 BUNDLE_ID = "com.digitaln.switchplayer"
 BUILD_LOG_FIRST = 512 * 1024  # how much of a long Build log the pane starts with
 BUILD_LOG_PIECE = 256 * 1024  # and reads at most at a time
@@ -165,6 +166,7 @@ class SwitchPlayerApp:
         self._game_running = game_running or self._native.game_running
         self._settings = settings.Settings(self._data_dir / "settings.json", first_launch=first_launch)
         self._records = records.Records(self._data_dir / "build-records.json")
+        self._build_icons = self._data_dir / "Icons" / "Builds"  # each game's icon from its Build's game event
         self._build_files = {}  # game id → its game files when its running Build started
         self._build_commits = {}  # game id → the nxnative commit its running Build runs with
         self._titledb = titledb.TitleDB(self._data_dir / "titledb")
@@ -221,25 +223,59 @@ class SwitchPlayerApp:
 
     def _get_builder(self):
         if self._builder is None:
-            self._builder = builds.Builder(self._prepare, self._log_dir / "Builds",
-                                          on_finish=self._build_finished, on_busy=self._busy_changed)
+            self._builder = builds.Builder(self._prepare, self._log_dir / "Builds", on_finish=self._build_finished,
+                                          on_busy=self._busy_changed, on_game=self._build_named)
         return self._builder
 
     def _build_finished(self, job, ok):
         self._last_scan = None
         files = self._build_files.pop(job.game_id, None)
         commit = self._build_commits.pop(job.game_id, None)
+        game = self._games.get(job.game_id)
+        name = self._game_name(game) if game else job.name  # as the tile says it, nxnative's name once it gave one
         if ok:
             # What this Build used: Out of date and the changes since the last Build go by it.
             self._records.set_build(job.game_id, files, commit)
-            game = self._games.get(job.game_id)
             with self._freshness_lock:
                 if game:
                     self._freshness.pop(game.title_id, None)
                 self._freshness_checked = None
-            self._dispatch(self._native.notify, job.name, "Build finished")
+            self._dispatch(self._native.notify, name, "Build finished")
         elif job.state == "failed":
-            self._dispatch(self._native.notify, job.name, "Build failed")
+            self._dispatch(self._native.notify, name, "Build failed")
+
+    def _build_named(self, job, event):
+        """The build script's `game` event: the game's own name and icon, about a minute into its
+        Build. Both are kept at once (the icon copied, as the build folder it's in may be cleared
+        when the Build ends), so the tile shows them from now on, even if this Build stops or fails,
+        until the Game app exists to speak for itself."""
+        tid, name, icon = event.get("title_id"), event.get("name"), event.get("icon")
+        if not library.is_title_id(tid) or not isinstance(name, str) or not name.strip():
+            log.warning("Ignored a game event without a title ID and a name: %r", event)
+            return
+        tid = tid.upper()
+        output = self._build_icons / f"{builds.safe_name(job.game_id)}.jpg"
+        kept = None
+        try:
+            if isinstance(icon, str) and Path(icon).is_file():
+                output.parent.mkdir(parents=True, exist_ok=True)
+                part = output.with_name(output.name + ".partial")
+                shutil.copyfile(icon, part)  # a new modified time, so the page asks for the new art
+                os.replace(part, output)
+                kept = output.name
+            else:
+                output.unlink(missing_ok=True)  # another title's, or a game without an icon now
+        except OSError as e:
+            log.warning("Couldn't keep the icon of %s: %s", job.name, e)
+        self._records.set_game(job.game_id, tid, name.strip(), kept)
+
+    def _named(self, game):
+        """What a Build's `game` event said about this game ({title_id, name, icon}), or None
+        before one, or when the Game folder has since come to hold another title."""
+        record = self._records.game(game.id)
+        if record and game.title_id and record["title_id"].upper() == game.title_id.upper():
+            return record
+        return None
 
     def _busy_changed(self, busy):
         if busy and self._caffeinate is None:
@@ -401,7 +437,7 @@ class SwitchPlayerApp:
             self._update_titles(games)
             self._refresh_freshness()
         games = sorted(self._games.values(),
-                       key=lambda game: library.sort_key(game.name(self._titledb.name(game.title_id))))
+                       key=lambda game: library.sort_key(self._game_name(game)))
         result = []
         with self._freshness_lock:
             freshness = dict(self._freshness)
@@ -411,7 +447,7 @@ class SwitchPlayerApp:
             state = "ready" if game.app else "nxplay" if game.nxplay_build else "none"
             result.append({
                 "id": game.id,
-                "name": game.name(self._titledb.name(game.title_id)),
+                "name": self._game_name(game),
                 "title_id": game.title_id,
                 "art": self._art_key(self._art_path(game)),
                 "state": status["state"] if status else state,
@@ -512,7 +548,8 @@ class SwitchPlayerApp:
         return f"nxnative has changes for {count} game{'' if count == 1 else 's'}", " ".join(parts)
 
     def _game_name(self, game):
-        return game.name(self._titledb.name(game.title_id))
+        named = self._named(game)
+        return game.name(self._titledb.name(game.title_id), named and named["name"])
 
     def _update_titles(self, games):
         missing = [game.title_id for game in games
@@ -537,16 +574,21 @@ class SwitchPlayerApp:
                     return
 
     def _art_path(self, game):
+        """The eShop's art, else the Game app's own icon, else the icon a Build's `game` event gave
+        (the one its Game app will get), else none: a plain tile."""
         art = self._titledb.art(game.title_id)
-        if art or not game or not game.app:
+        if art:
             return art
-        icon = game.app.path / "Contents" / "Resources" / "AppIcon.icns"
-        if not icon.is_file():
-            return None
-        output = self._data_dir / "Icons" / f"{builds.safe_name(game.id)}-{icon.stat().st_mtime_ns}.jpg"
-        if not output.is_file():
-            self._native.convert_icon(icon, output)
-        return output if output.is_file() else None
+        icon = game.app.path / "Contents" / "Resources" / "AppIcon.icns" if game.app else None
+        if icon and icon.is_file():
+            output = self._data_dir / "Icons" / f"{builds.safe_name(game.id)}-{icon.stat().st_mtime_ns}.jpg"
+            if not output.is_file():
+                self._native.convert_icon(icon, output)
+            if output.is_file():
+                return output
+        named = self._named(game)
+        kept = self._build_icons / Path(named["icon"]).name if named and named["icon"] else None
+        return kept if kept and kept.is_file() else None
 
     def _game_log(self, game):
         if self._data_dir == DATA_DIR and not os.environ.get("SWITCHPLAYER_DATA_DIR"):
@@ -658,7 +700,7 @@ class SwitchPlayerApp:
     def _build(self, game_id):
         game = self._games.get(game_id)
         if game:
-            self._get_builder().build(game.id, game.path, game.name(self._titledb.name(game.title_id)))
+            self._get_builder().build(game.id, game.path, self._game_name(game))
 
     def _stop(self, game_id):
         if self._builder:

@@ -67,12 +67,13 @@ class Game:
         folder = self.build_folder or root / f"{self.title_id}_build"
         return folder / "run" / "save"
 
-    def name(self, titledb_name=None):
-        """The game's own name: its Game app's, else the eShop's, else the Game folder's
-        (which the player may not have bothered to name well)."""
+    def name(self, titledb_name=None, build_name=None):
+        """The game's own name: its Game app's, else the one a Build's `game` event gave it (the
+        name its Game app will carry), else the eShop's, else the Game folder's (which the player
+        may not have bothered to name well)."""
         if self.app and self.app.name:
             return self.app.name
-        return titledb_name or (self.path.stem if self.path.suffix.lower() == ".nup" else self.path.name)
+        return build_name or titledb_name or (self.path.stem if self.path.suffix.lower() == ".nup" else self.path.name)
 
 
 def is_title_id(value):

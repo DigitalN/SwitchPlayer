@@ -63,13 +63,16 @@ def log_path(log_dir, game_id):
 class Builder:
     """`prepare(job)` runs on the Build's thread before each Build (the Engine update, the
     Python environment) and returns (argv, working folder, environment), or raises
-    NxnativeError with a message for the player. `on_finish(job, ok)` follows each Build,
-    and `on_busy(busy)` each change between nothing to do and something running or waiting."""
+    NxnativeError with a message for the player. `on_game(job, event)` gets the build
+    script's `game` event, which names the game, its icon and the Game app it will write, once
+    it knows them (before the shader stages). `on_finish(job, ok)` follows each Build, and
+    `on_busy(busy)` each change between nothing to do and something running or waiting."""
 
-    def __init__(self, prepare, log_dir, on_finish=None, on_busy=None):
+    def __init__(self, prepare, log_dir, on_finish=None, on_busy=None, on_game=None):
         self._prepare = prepare
         self._log_dir = Path(log_dir)
         self._on_finish = on_finish or (lambda job, ok: None)
+        self._on_game = on_game or (lambda job, event: None)
         self._on_busy = on_busy or (lambda busy: None)
         self._jobs = {}  # game id → Job, for the ones with something to show
         self._queue = []  # game ids waiting, in order
@@ -307,6 +310,11 @@ class Builder:
                 text = msg
             elif ev == "shaders_stale":
                 text = f"   shaders to rebuild ({e.get('reason')}): {e.get('count')}"
+        if ev == "game":  # off the lock: it copies the icon. The say after it tells the Build log
+            try:
+                self._on_game(job, e)
+            except Exception:
+                log.exception("After the game event of %s", job.name)
         if text is not None:
             with write:
                 out.write(text + "\n")
