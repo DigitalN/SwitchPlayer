@@ -113,6 +113,24 @@ def test_a_new_game_brings_the_list_back_once_a_launch(tmp_path):
     assert db.name(MARIO) is None and db.art(MARIO) is None
 
 
+def test_a_failed_image_is_tried_once_a_launch_not_at_every_scan(tmp_path):
+    images = {"https://img-eshop.cdn.nintendo.net/i/mario.jpg": JPEG}
+    net = FakeNet(images={})  # the CDN answers with an error
+    mario = "https://img-eshop.cdn.nintendo.net/i/mario.jpg"
+    db = titledb.TitleDB(tmp_path, download=net)
+
+    db.update([MARIO])  # the Library scan runs every 2 s
+    db.update([MARIO])
+
+    assert net.calls.count(mario) == 1
+
+    net.images = images  # the next launch tries again, and this time gets it
+    again = titledb.TitleDB(tmp_path, download=net)
+    assert again.update([MARIO]) == {MARIO}
+    assert net.calls.count(mario) == 2
+    assert again.art(MARIO).read_bytes() == JPEG
+
+
 def test_refuses_art_from_elsewhere_and_anything_not_a_jpeg(tmp_path):
     listing = {"1": {"id": RHYTHM, "name": "Rhythm", "iconUrl": "http://img-eshop.cdn.nintendo.net/i/rhythm.jpg"},
                "2": {"id": MARIO, "name": "Mario", "iconUrl": "https://img-eshop.cdn.nintendo.net/i/mario.jpg"}}

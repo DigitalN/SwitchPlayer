@@ -1,3 +1,5 @@
+# Switch Player skips the cask (HOMEBREW_BUNDLE_CASK_SKIP): a .pkg installs through sudo, which needs a
+# terminal. Build Setup shows the player the command to run instead (prerequisites.py).
 brew "uv"
 brew "xcodegen"
 brew "zstd"

@@ -41,6 +41,7 @@ class Job:
     stop_requested: bool = False
     red: str | None = None  # the last [RED] message
     stderr_tail: list = field(default_factory=list)
+    say: object = field(default=lambda text: None, repr=False)  # a line for the Build log, while preparing
 
 
 def safe_name(name):
@@ -190,6 +191,7 @@ class Builder:
         with open(job.log_path, "w", encoding="utf-8") as out:
             out.write(f"Build of {job.name} ({job.path}), {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             out.flush()
+            job.say = lambda text: (out.write(text + "\n"), out.flush())
             try:
                 argv, cwd, env = self._prepare(job)
             except NxnativeError as e:

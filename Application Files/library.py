@@ -5,7 +5,11 @@ files and anything else at the top level are ignored. A Game app is `<game name>
 Game folder, or for a .nup, in the Library folder beside it.
 
 Everything read from a Game app is in nxnative's front-end contract (docs/frontends.md): its
-Info.plist. Only reads: nothing here writes to the Library folder.
+Info.plist. Two details aren't documented yet and are read under ADR 0001's exception, while
+its pull request (the fourth in docs/DESIGN.md) is unopened or open, because a wrong answer
+could only change what's shown: the `DMCommit` and `DMChain` keys, which only the Out of date
+check uses (nxnative.py), and the name of the `<title ID>_survey` folder, which keeps a build's
+survey from being taken for a Game folder. Only reads: nothing here writes to the Library folder.
 """
 
 import plistlib
@@ -15,6 +19,7 @@ from pathlib import Path
 
 TAGGED_ID = re.compile(r"\[(0100[0-9A-F]{12})\]", re.I)
 BUILD_FOLDER = re.compile(r"^(0100[0-9A-F]{12})_build$", re.I)
+SURVEY_FOLDER = re.compile(r"^0100[0-9A-F]{12}_survey$", re.I)  # undocumented: see DESIGN.md's pull request 4
 NXPLAY_FILES = ("start_mac.sh", "nxplay-settings.json")  # NX Play writes these into a build folder; nxnative doesn't
 LEADING_ARTICLE = re.compile(r"^the\s+", re.I)
 
@@ -26,6 +31,7 @@ class GameApp:
     name: str | None  # the game's own name, which nxnative takes from its files
     commit: str | None  # DMCommit: the nxnative checkout it was built from
     chain: str | None  # DMChain: the shader version it was built with
+    bundle_id: str | None = None  # CFBundleIdentifier: org.nxnative.<title ID> unless the app was packed with another
 
 
 @dataclass
@@ -96,7 +102,8 @@ def read_app(path):
         return None
     text = lambda key: info[key].strip() if isinstance(info.get(key), str) and info[key].strip() else None
     return GameApp(path=path, title_id=tid.upper(), name=text("CFBundleDisplayName") or text("CFBundleName"),
-                   commit=text("DMCommit"), chain=text("DMChain"))
+                   commit=text("DMCommit"), chain=text("DMChain"),
+                   bundle_id=text("CFBundleIdentifier"))
 
 
 def _apps_in(folder):
@@ -150,9 +157,11 @@ def scan(library):
 
 
 def _built_beside_nup(name):
-    """A .nup's Game app, half-written Game app and build folder go in the Library folder
-    itself; none of them is a Game folder."""
-    return name.endswith((".app", ".app.partial")) or bool(BUILD_FOLDER.match(name))
+    """A .nup's Game app, half-written Game app, build folder and, for a game nxnative has no
+    profile for, its `<title ID>_survey` folder go in the Library folder itself; none of them is
+    a Game folder. (The survey folder isn't in docs/frontends.md: it's read under ADR 0001's
+    exception, where a wrong answer could only change what's shown.)"""
+    return name.endswith((".app", ".app.partial")) or bool(BUILD_FOLDER.match(name) or SURVEY_FOLDER.match(name))
 
 
 def sort_key(name):

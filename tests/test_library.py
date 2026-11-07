@@ -97,6 +97,17 @@ def test_a_nup_and_what_its_builds_leave_beside_it(tmp_path):
     assert game.app.name == "Super Mario Party Jamboree" and game.nxplay_save
 
 
+def test_a_survey_folder_beside_a_nup_is_not_a_game(tmp_path):
+    """For a game nxnative has no profile for, the build script surveys it into <title ID>_survey
+    in the folder holding the .nup: here the Library folder."""
+    (tmp_path / f"Super Mario Party Jamboree [{MARIO}].nup").touch()
+    (tmp_path / f"{MARIO}_survey").mkdir()
+    (tmp_path / f"{RHYTHM.lower()}_survey").mkdir()  # in either case
+    (tmp_path / "Rhythm Heaven").mkdir()  # a Game folder is still a Game folder
+
+    assert [g.id for g in library.scan(tmp_path)] == ["Rhythm Heaven", f"Super Mario Party Jamboree [{MARIO}].nup"]
+
+
 def test_a_nup_names_itself_by_its_file_until_more_is_known(tmp_path):
     (tmp_path / "jamboree.nup").touch()
     game, = library.scan(tmp_path)
@@ -107,3 +118,13 @@ def test_sorts_like_music_does():
     names = ["The Legend of Zelda: Echoes of Wisdom", "Super Mario Party Jamboree", "Rhythm Heaven Groove", "theme park"]
     assert sorted(names, key=library.sort_key) == [
         "The Legend of Zelda: Echoes of Wisdom", "Rhythm Heaven Groove", "Super Mario Party Jamboree", "theme park"]
+
+
+def test_a_game_app_tells_its_own_bundle_id(tmp_path):
+    other = make_app(tmp_path, "Other.app", ZELDA, "Other", CFBundleIdentifier="com.example.zelda")
+    default = make_app(tmp_path, "Default.app", MARIO, "Default", CFBundleIdentifier=f"org.nxnative.{MARIO.lower()}")
+    bare = make_app(tmp_path, "Bare.app", RHYTHM, "Bare")
+
+    assert library.read_app(other).bundle_id == "com.example.zelda"
+    assert library.read_app(default).bundle_id == f"org.nxnative.{MARIO.lower()}"
+    assert library.read_app(bare).bundle_id is None

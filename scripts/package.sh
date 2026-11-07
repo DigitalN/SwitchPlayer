@@ -6,6 +6,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VOLUME_NAME="Switch Player"
+# The folder build.sh builds in (it reads the same variable): the disk image is staged inside it,
+# and all of it is removed at the end.
+BUILD_DIR="${SWITCHPLAYER_BUILD_DIR:-$HOME/Library/Caches/SwitchPlayer-build}"
 APP=$(scripts/build.sh)
 TEAM=$(codesign -d --verbose=2 "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
 if [[ -z "$TEAM" || "$TEAM" == "not set" ]]; then
@@ -15,7 +18,7 @@ fi
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
 DMG="dist/Switch-Player-$VERSION.dmg"
 
-WORK="$HOME/Library/Caches/SwitchPlayer-build/dmg"
+WORK="$BUILD_DIR/dmg"
 rm -rf "$WORK"
 mkdir -p "$WORK/source/.background"
 ditto "$APP" "$WORK/source/Switch Player.app"
@@ -75,5 +78,5 @@ trap - EXIT
 mkdir -p dist
 rm -f "$DMG"
 hdiutil convert -quiet "$WORK/layout.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
-rm -rf "$(dirname "$WORK")"
+rm -rf "$BUILD_DIR"
 echo "$DMG"

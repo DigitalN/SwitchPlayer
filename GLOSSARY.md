@@ -26,7 +26,7 @@ _Avoid_: build, port, wrapper
 
 **Build**:
 Making a Game folder's Game app, for the first time or again, with the latest nxnative code. Only the player starts one.
-_Avoid_: pack, compile, rebuild (a rebuild is a Build)
+_Avoid_: pack, compile, rebuild (a rebuild is a Build). The one place the word stays is the page's own wording: the ⋯ item **Rebuild** and the Out of date line "Your version is out of date, consider rebuilding", which the page and Check for nxnative Updates… use, saying it to the player the way people do. Code, docs and PRs say Build.
 
 **Stop**:
 Ending a Build before it finishes, or taking a waiting one out of the queue. The Game app from the last finished Build stays playable.

@@ -13,6 +13,9 @@ Homebrew dependency list in "Application Files/Brewfile" are adapted from NX Pla
 pyproject.toml and Brewfile. The prerequisite checks in "Application Files/prerequisites.py"
 are adapted from NX Play's bin/setup.
 
+The Out of date check, Copy.freshness in "Application Files/nxnative.py", is adapted from
+NX Play's ask_update() and no_local_commits() in its nxplay script.
+
 MIT License
 
 Copyright (c) 2026 Oleh Khomei

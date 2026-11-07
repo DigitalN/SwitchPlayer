@@ -19,14 +19,14 @@ Switch Player doesn't include any games or keys.
 ## Requirements
 
 - An Apple silicon Mac with macOS 26.6 or later.
-- For Builds: Xcode, opened once, with its Metal Toolchain, and [Homebrew](https://brew.sh). Build Setup checks for these and installs the Homebrew tools when you ask.
+- For Builds: Xcode, opened once, with its Metal Toolchain, the .NET SDK, and [Homebrew](https://brew.sh). Build Setup checks for these and installs the Homebrew tools when you ask.
 - Several gigabytes of disk space per game for its build folder.
 
 ## Getting started
 
 1. Open the disk image and drag **Switch Player** to **Applications**.
 2. Open Switch Player. Coming from NX Play? Your Library folder and keys file are picked up automatically. Otherwise choose **Switch Player → Choose Library Folder…**, with one folder (or one `.nup` file) per game, and **Choose Keys File…** if your games need keys.
-3. **Build Setup** opens each time Switch Player starts and lists what a Build needs. Follow its Xcode and Metal Toolchain steps, then click **Install Build Tools**. Once everything has a tick, click **Done**.
+3. **Build Setup** opens each time Switch Player starts and lists what a Build needs. Follow its Xcode and Metal Toolchain steps, and run the one Terminal command it shows for the .NET SDK (it asks for your password, which an app can't), then click **Install Build Tools**. Once everything has a tick, click **Done**.
 4. Click **Build** beside a game. The first Build also downloads nxnative and installs the Python packages it needs, so it takes a little longer.
 5. When the game says **Ready**, click its artwork to play.
 
@@ -51,6 +51,10 @@ Click **⋯** or right-click a game for its **Settings…** window, **Build Opti
 **nxnative** changes often. Switch Player compares your built games with the latest nxnative each time it opens and once a day. When a change affects a game, its tile says *Your version is out of date, consider rebuilding*; other changes show as a count. **Switch Player → Check for nxnative Updates…** checks now and tells you what it found. Every Build uses the latest nxnative.
 
 **Switch Player** updates itself from this repository's releases, checking once a day. **Switch Player → Check for Updates…** checks now.
+
+### Building with your own nxnative checkout
+
+By default Switch Player keeps its own copy of nxnative and moves it to the latest code at each Build. To build with a checkout of your own instead, for example to try local changes, set `nxnative_checkout` in its settings file; see [Another nxnative checkout](docs/DEVELOPMENT.md#another-nxnative-checkout).
 
 ## Development
 

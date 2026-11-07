@@ -214,7 +214,8 @@ class Updater:
         if self.unavailable_reason:
             _open_releases_page()
         elif self.status == READY:
-            self._install()
+            # An update already waiting, asked for from the menu, which runs on a thread of its own.
+            _on_main(self._install_if_quiet, True)
         elif self.status == IDLE:
             self._start_check(user_initiated=True)
 
@@ -246,7 +247,7 @@ class Updater:
             self._staged = self._download(url)
             self._set_status(READY, version)
             log.info("%s is ready to install", version)
-            AppHelper.callAfter(self._install if user_initiated else self._install_if_quiet)
+            AppHelper.callAfter(self._install_if_quiet, user_initiated)
         except Exception as e:
             self._set_status(IDLE)
             log.error("Update check failed: %s", e)
@@ -287,21 +288,28 @@ class Updater:
             shutil.rmtree(folder, ignore_errors=True)
             raise
 
-    def _install_if_quiet(self):
+    def _install_if_quiet(self, user_initiated=False):
+        """On the main thread. Never while a Build runs or waits. The player's own Check for
+        Updates… doesn't also wait for a quiet keyboard and mouse: they just used it, and are told
+        when the install is held for a Build, which then installs it once it ends."""
         import Quartz
         from AppKit import NSEvent
         from Foundation import NSTimer
         if self.status != READY:
             self._stop_install_timer()
             return
+        busy = self._is_busy()
         idle = Quartz.CGEventSourceSecondsSinceLastEventType(
             Quartz.kCGEventSourceStateCombinedSessionState, Quartz.kCGAnyInputEventType)
-        quiet = idle >= QUIET_SECONDS and NSEvent.pressedMouseButtons() == 0
-        if quiet and not self._is_busy():
+        quiet = user_initiated or (idle >= QUIET_SECONDS and NSEvent.pressedMouseButtons() == 0)
+        if quiet and not busy:
             self._install()
-        elif self._install_timer is None:
+            return
+        if self._install_timer is None:
             self._install_timer = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
                 INSTALL_RETRY, True, lambda timer: self._install_if_quiet())
+        if busy and user_initiated:
+            _alert(f"Switch Player {self.version} is ready", "It will install once the Build ends.")
 
     def _stop_install_timer(self):
         if self._install_timer is not None:
@@ -326,6 +334,11 @@ class Updater:
         log.info("Installed %s; relaunching", version)
         relaunch(self._app, background=True)
         self._quit_app()
+
+
+def _on_main(function, *args):
+    from PyObjCTools import AppHelper
+    AppHelper.callAfter(function, *args)
 
 
 def _open_releases_page():

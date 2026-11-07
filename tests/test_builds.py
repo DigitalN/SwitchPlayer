@@ -136,6 +136,20 @@ def test_stop_while_preparing(tmp_path):
     assert not (folder / "argv.json").exists()  # the script never started
 
 
+def test_what_preparation_says_goes_into_the_build_log(tmp_path):
+    folder = game(tmp_path, "Echoes")
+
+    def prepare(job):
+        job.say("Couldn't reach nxnative's upstream (no network). Building with Switch Player's copy as it is, at abc123.")
+        return [sys.executable, str(FAKE), str(job.path)], job.path, None
+
+    h = Harness(tmp_path, prepare)
+    h.builder.build("Echoes", folder, "Echoes")
+    h.wait(1)
+    text = h.builder.build_log("Echoes").read_text()
+    assert text.index("Couldn't reach nxnative's upstream") < text.index("$ ")
+
+
 def test_what_prepare_finds_missing_is_the_error(tmp_path):
     folder = game(tmp_path, "Echoes")
 

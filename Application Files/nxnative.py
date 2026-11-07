@@ -15,13 +15,22 @@ docs/DESIGN.md).
 Only nxnative's documented front-end contract is used (docs/frontends.md, ADR 0001): the build
 script's command line. Whichever Xcode macOS has selected builds; nxnative's own error says
 when it needs another.
+
+One exception, ADR 0001's, while its pull request is unopened or open (the fourth in
+docs/DESIGN.md): the Out of date check (Copy.freshness) reads details docs/frontends.md doesn't
+document yet: the `DMCommit` and `DMChain` a Game app records, the `dm/games/<title ID>` folder
+that holds each game's own files, and the shader version `DMSH_CHAIN` in
+`dm/gfx/nvn/dmsh_chain.h`. A failure there can only change what the tiles show, never a Build
+or Play.
 """
 
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 log = logging.getLogger("switchplayer")
@@ -35,7 +44,12 @@ DROPPED_ENV = ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONEXECUTABLE", 
 
 
 class NxnativeError(Exception):
-    """Something a Build needs isn't there. The message is for the player."""
+    """Something a Build needs isn't there. The message is for the player. `returncode` is
+    the failed tool's exit code, when a tool failed."""
+
+    def __init__(self, message, returncode=None):
+        super().__init__(message)
+        self.returncode = returncode
 
 
 def _run(argv, cwd=None, env=None, timeout=600):
@@ -47,7 +61,8 @@ def _run(argv, cwd=None, env=None, timeout=600):
         raise NxnativeError(f"Couldn't run {argv[0]}: {e.strerror}") from None
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip().splitlines()
-        raise NxnativeError(detail[-1] if detail else f"{Path(argv[0]).name} {argv[1]} failed ({result.returncode})")
+        raise NxnativeError(detail[-1] if detail else f"{Path(argv[0]).name} {argv[1]} failed ({result.returncode})",
+                            returncode=result.returncode)
     return result.stdout.strip()
 
 
@@ -98,13 +113,22 @@ class Copy:
         if self.own and self.ready():
             git(self.path, "fetch", "--quiet", "--prune", "origin", timeout=300)
 
-    def update(self):
+    def update(self, say=None):
         """The Engine update, as a Build starts: Switch Player's own copy moves to upstream's latest.
-        Returns the commit the Build will use."""
+        Returns the commit the Build will use. When upstream can't be reached, a copy that's
+        already complete is used as it is, and say(line) tells the Build's log; only having no
+        copy yet fails (the clone needs the network)."""
         self.ensure()
         if self.own:
             before = self.commit()
-            self.fetch()
+            try:
+                self.fetch()
+            except NxnativeError as e:
+                log.warning("Engine update: couldn't fetch nxnative (%s); using the copy as it is, at %s", e, before)
+                if say:
+                    say(f"Couldn't reach nxnative's upstream ({e}). Building with Switch Player's copy as it is"
+                        + (f", at {before}." if before else "."))
+                return before
             git(self.path, "reset", "--quiet", "--hard", self._upstream_head(), timeout=300)
             after = self.commit()
             if after != before:
@@ -118,8 +142,25 @@ class Copy:
             git(self.path, "remote", "set-head", "origin", "--auto", timeout=120)
             return git(self.path, "rev-parse", "--verify", "refs/remotes/origin/HEAD", timeout=30)
 
+    def _known_commit(self, commit):
+        """The full hash of a commit this checkout has, or None when it hasn't (git exits 1 for
+        that; a failure of git itself still raises)."""
+        if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit):
+            return None
+        try:
+            return git(self.path, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", timeout=30)
+        except NxnativeError as e:
+            if e.returncode == 1:
+                return None
+            raise
+
     def freshness(self, apps):
-        """Fetched changes since each Game app's Build, without moving this checkout."""
+        """Fetched changes since each Game app's Build, without moving this checkout.
+
+        Adapted from NX Play's ask_update() and no_local_commits() (the `nxplay` script in
+        varyform/nx-native-wrapper; MIT, see THIRD-PARTY-NOTICES): the commit a build was made
+        from, the commits since, those touching `dm/games/<title ID>`, and whether the shader
+        version differs."""
         result = {app.title_id: {"out_of_date": False, "newer": 0} for app in apps if app}
         if not result:
             return result
@@ -129,10 +170,12 @@ class Copy:
         for app in apps:
             if not app or not app.commit:
                 continue
-            if app.commit.endswith("+dirty"):
-                result[app.title_id]["out_of_date"] = True
+            # `+dirty`: nxnative's checkout had uncommitted edits. They can't be compared, so it's
+            # compared from the commit they were on; a Build from the same checkout clears it.
+            base = self._known_commit(app.commit.removesuffix("+dirty"))
+            if base is None:  # built from a commit this copy hasn't got: a missing detail for this game alone
+                log.info("%s was built from nxnative %s, which this copy doesn't have", app.title_id, app.commit)
                 continue
-            base = git(self.path, "rev-parse", "--verify", "--quiet", f"{app.commit}^{{commit}}", timeout=30)
             newer = int(git(self.path, "rev-list", "--count", f"{base}..{target}", timeout=60))
             changed = bool(git(self.path, "log", "--format=%H", "-1", f"{base}..{target}", "--",
                                f"dm/games/{app.title_id}", timeout=60))
@@ -142,20 +185,42 @@ class Copy:
                 chain = ""
             current_chain = next((line.split('"')[1] for line in chain.splitlines()
                                   if line.startswith('#define DMSH_CHAIN "')), None)
-            out_of_date = changed or (current_chain is not None and current_chain != app.chain)
+            # Vulkan and GL games have no DMChain: with no shader version to compare, only the count shows.
+            out_of_date = changed or (current_chain is not None and app.chain is not None
+                                      and current_chain != app.chain)
             result[app.title_id] = {"out_of_date": out_of_date, "newer": newer}
         return result
 
 
-def game_files_changed(game):
-    """A Game folder gained a base game, update or DLC after its Game app was built."""
+GAME_SUFFIXES = (".nsp", ".nsz", ".xci", ".xcz", ".nup")
+
+
+def _game_file_paths(game):
+    paths = [game.path] if game.path.suffix.lower() == ".nup" else list(game.path.iterdir())
+    return [path for path in paths if path.suffix.lower() in GAME_SUFFIXES]
+
+
+def game_files(game):
+    """{file name: size} of a Game folder's base game, update and DLC files (a .nup: itself), as
+    records.py keeps them at each Build. Raises OSError when the folder can't be read."""
+    return {path.name: path.stat().st_size for path in _game_file_paths(game)}
+
+
+def game_files_changed(game, recorded=None):
+    """A Game folder gained a base game, update or DLC after its Game app was built.
+
+    `recorded` is game_files() as of that Build's start (records.py), which still tells a file
+    copied or moved in with its old modification date. Sizes are compared, not names, so a file
+    renamed, tagged or carried to another disk with the whole Library isn't a new one. Without a
+    record (a Game app built before Switch Player kept them), it goes by what the files' own
+    modification dates say against the Game app's Info.plist, which misses such a copy."""
     if not game.app:
         return False
     try:
+        if recorded is not None:
+            return bool(Counter(game_files(game).values()) - Counter(recorded.values()))
         built = (game.app.path / "Contents" / "Info.plist").stat().st_mtime
-        paths = [game.path] if game.path.suffix.lower() == ".nup" else list(game.path.iterdir())
-        return any(path.suffix.lower() in (".nsp", ".nsz", ".xci", ".xcz", ".nup")
-                   and path.stat().st_mtime > built for path in paths)
+        return any(path.stat().st_mtime > built for path in _game_file_paths(game))
     except OSError:
         return False
 

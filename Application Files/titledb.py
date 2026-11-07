@@ -150,6 +150,7 @@ class TitleDB:
         self._list_url = list_url
         self._download = download
         self._list_tried = False  # one download of the list per launch, even when it fails
+        self._images_tried = set()  # title IDs whose image was tried this launch, so a failure isn't retried every scan
         self._lock = threading.Lock()
 
     def _load(self):
@@ -200,8 +201,10 @@ class TitleDB:
                     self._save(index)
             for tid in tids:
                 icon = (index["titles"].get(tid) or {}).get("icon")
-                if icon and not self.art(tid) and self._fetch_image(icon, tid):
-                    changed.add(tid)
+                if icon and not self.art(tid) and tid not in self._images_tried:
+                    self._images_tried.add(tid)
+                    if self._fetch_image(icon, tid):
+                        changed.add(tid)
             return changed
 
     def _fetch_list(self, wanted):

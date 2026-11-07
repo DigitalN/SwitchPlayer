@@ -1,4 +1,10 @@
-"""Read-only checks and explicit installation of the tools nxnative Builds need."""
+"""Read-only checks and explicit installation of the tools nxnative Builds need.
+
+Homebrew's formulae install with a button. The .NET SDK doesn't: its cask installs a .pkg
+through `sudo`, which asks for a password on a terminal, and Switch Player, opened from the Dock,
+has none. So the Brewfile's cask is skipped for both the check and the install, and the SDK is
+a manual item like Xcode's: its line shows the one command to run in Terminal.
+"""
 
 import os
 import subprocess
@@ -6,10 +12,16 @@ from pathlib import Path
 
 from nxnative import NxnativeError
 
+DOTNET = "/usr/local/share/dotnet/dotnet"  # where the Microsoft installer puts it, and where a Build looks
+DOTNET_COMMAND = "brew install --cask dotnet-sdk"
+BREW_ENV = {"HOMEBREW_BUNDLE_CASK_SKIP": "dotnet-sdk"}  # the Brewfile's cask: see above
+BREWFILE = Path(__file__).parent / "Brewfile"
 
-def _run(argv, timeout=60):
+
+def _run(argv, timeout=60, env=None):
     try:
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                              env={**os.environ, **env} if env else None)
     except (OSError, subprocess.TimeoutExpired) as e:
         return subprocess.CompletedProcess(argv, 1, "", str(e))
 
@@ -54,11 +66,18 @@ def check(run=_run):
                   "In Terminal, run: xcodebuild -downloadComponent MetalToolchain",
                   "action": None})
 
+    sdks = run([DOTNET, "--list-sdks"])
+    sdk_lines = sdks.stdout.strip().splitlines() if sdks.returncode == 0 else []
+    items.append({"id": "dotnet", "name": ".NET SDK", "ready": bool(sdk_lines),
+                  "detail": f".NET SDK {sdk_lines[-1].split()[0]} is installed." if sdk_lines else
+                  f"In Terminal, run: {DOTNET_COMMAND} (it asks for your password)",
+                  "action": None})
+
     brew = _brew()
-    tools = run([brew, "bundle", "check", "--file", str(Path(__file__).parent / "Brewfile"), "--no-upgrade"]) if brew else None
+    tools = run([brew, "bundle", "check", "--file", str(BREWFILE), "--no-upgrade"], env=BREW_ENV) if brew else None
     tools_ready = tools is not None and tools.returncode == 0
     items.append({"id": "tools", "name": "Build tools", "ready": tools_ready,
-                  "detail": "uv, xcodegen, zstd, glslang and the .NET SDK are installed." if tools_ready else
+                  "detail": "xcodegen, zstd and glslang are installed." if tools_ready else
                   "Homebrew tools are missing." if brew else "Install Homebrew from https://brew.sh first.",
                   "action": "install" if brew and not tools_ready else None})
 
@@ -66,11 +85,12 @@ def check(run=_run):
 
 
 def install_tools(run=_run):
-    """Only after the player asks: install the Brewfile's tools with the installed Homebrew."""
+    """Only after the player asks: install the Brewfile's formulae with the installed Homebrew
+    (not the .NET SDK's cask: see the top)."""
     brew = _brew()
     if not brew:
         raise NxnativeError("Install Homebrew from https://brew.sh first.")
-    result = run([brew, "bundle", "--file", str(Path(__file__).parent / "Brewfile"), "--no-upgrade"], timeout=1800)
+    result = run([brew, "bundle", "--file", str(BREWFILE), "--no-upgrade"], timeout=1800, env=BREW_ENV)
     if result.returncode:
         detail = (result.stderr or result.stdout).strip().splitlines()
         raise NxnativeError(detail[-1] if detail else "Homebrew couldn't install the Build tools.")
