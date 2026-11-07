@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 import builds
+import game_settings
 import launch
 import library
 import migration
@@ -27,6 +28,10 @@ VERSION = "0.1.8"
 BUNDLE_ID = "com.digitaln.switchplayer"
 BUILD_LOG_FIRST = 512 * 1024  # how much of a long Build log the pane starts with
 BUILD_LOG_PIECE = 256 * 1024  # and reads at most at a time
+# A Game app's saved "Show this window at launch" (Launcher.swift's @AppStorage), which nxnative's
+# front-end contract doesn't name. Only for a settings list the Settings panel can't draw: opening
+# the game's own Settings window removes it first, under ADR 0001's second exception.
+SETTINGS_WINDOW_CHOICE = "window.show"
 if os.environ.get("SWITCHPLAYER_DATA_DIR"):
     DATA_DIR = Path(os.environ["SWITCHPLAYER_DATA_DIR"]).expanduser()
     LOG_DIR = DATA_DIR / "Logs"
@@ -40,12 +45,44 @@ def dispatch(function, *args):
     AppHelper.callAfter(function, *args)
 
 
+def app_bundle_id(game):
+    """A Game app's CFBundleIdentifier, which is also its saved choices' preferences domain:
+    nxnative's default only unless the app was packed with another."""
+    return game.app.bundle_id or f"org.nxnative.{game.title_id.lower()}"
+
+
 class Native:
     def open_app(self, path, no_launcher):
         argv = ["/usr/bin/open", str(path)]
         if no_launcher:
             argv += ["--args", "--no-launcher"]
         subprocess.run(argv, check=True)
+
+    def read_choices(self, bundle_id, keys):
+        """A Game app's saved choices among `keys`: only strings, as its launcher reads them."""
+        from Foundation import CFPreferencesAppSynchronize, CFPreferencesCopyAppValue
+        CFPreferencesAppSynchronize(bundle_id)  # anything the game's own window saved since
+        found = {}
+        for key in keys:
+            value = CFPreferencesCopyAppValue(key, bundle_id)
+            if isinstance(value, str):
+                found[key] = str(value)
+        return found
+
+    def write_choices(self, bundle_id, changes):
+        """Save {key: string, or None to remove} in a Game app's saved choices. True once saved."""
+        from Foundation import CFPreferencesAppSynchronize, CFPreferencesSetAppValue
+        for key, value in changes.items():
+            CFPreferencesSetAppValue(key, value, bundle_id)
+        return bool(CFPreferencesAppSynchronize(bundle_id))
+
+    def forget_settings_window_choice(self, bundle_id):
+        """Remove a Game app's saved "Show this window at launch", so its launcher falls back to
+        nxnative's default and shows the Settings window."""
+        from Foundation import CFPreferencesAppSynchronize, CFPreferencesSetAppValue
+        CFPreferencesSetAppValue(SETTINGS_WINDOW_CHOICE, None, bundle_id)
+        if not CFPreferencesAppSynchronize(bundle_id):
+            log.warning("Couldn't save %s's preferences", bundle_id)
 
     def reveal(self, path):
         from AppKit import NSURL, NSWorkspace
@@ -66,9 +103,7 @@ class Native:
         if not game.app:
             return False
         from AppKit import NSRunningApplication
-        # Its own CFBundleIdentifier: nxnative's default only unless the app was packed with another.
-        bundle_id = game.app.bundle_id or f"org.nxnative.{game.title_id.lower()}"
-        return bool(NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle_id))
+        return bool(NSRunningApplication.runningApplicationsWithBundleIdentifier_(app_bundle_id(game)))
 
     def confirm(self, message, action="Quit", detail=""):
         from AppKit import NSAlert, NSAlertFirstButtonReturn
@@ -600,9 +635,60 @@ class SwitchPlayerApp:
         if game and game.app:
             self._dispatch(self._native.open_app, game.app.path, True)
 
-    def _open_settings(self, game_id):
+    def _game_settings(self, game_id):
+        """The Settings panel's contents: {name, status, running, rows} (game_settings.rows),
+        or None for a game without a Game app."""
+        game = self._games.get(game_id)
+        if not game or not game.app:
+            return None
+        status, settings = game_settings.settings_list(game.app.path)
+        rows = []
+        if status == "ok":
+            try:
+                saved = self._native.read_choices(app_bundle_id(game), [setting.key for setting in settings])
+            except Exception as e:
+                log.warning("Couldn't read %s's saved choices: %s", game_id, e)
+                saved = {}
+            rows = game_settings.rows(settings, saved, self._fixed_settings(game))
+        try:
+            running = bool(self._game_running(game))
+        except Exception as e:
+            log.warning("Couldn't tell whether %s is running: %s", game_id, e)
+            running = False
+        return {"name": self._game_name(game), "status": status, "running": running, "rows": rows}
+
+    def _fixed_settings(self, game):
+        return game_settings.fixed_values(game.app.path, self._save_root / game.title_id / "env.txt")
+
+    def _save_game_settings(self, game_id, values):
+        """The Settings panel's Save: {env: value} into the Game app's saved choices, as its own
+        Settings window would save them. True once saved."""
+        game = self._games.get(game_id)
+        if not game or not game.app or not isinstance(values, dict):
+            return False
+        status, settings = game_settings.settings_list(game.app.path)
+        if status != "ok":
+            return False
+        changes = game_settings.changes(settings, values, self._fixed_settings(game))
+        try:
+            saved = bool(self._native.write_choices(app_bundle_id(game), changes))
+        except Exception as e:
+            log.warning("Couldn't save %s's Game settings: %s", game_id, e)
+            return False
+        if not saved:
+            log.warning("Couldn't save %s's Game settings: its preferences weren't written", game_id)
+        return saved
+
+    def _open_settings_window(self, game_id):
+        """The Settings panel's way out for a settings list it can't draw: the Game app with its
+        own Settings window, even when the player turned "Show this window at launch" off. A
+        failure to remove that choice still opens the Game app, which may then start the game."""
         game = self._games.get(game_id)
         if game and game.app:
+            try:
+                self._native.forget_settings_window_choice(app_bundle_id(game))
+            except Exception as e:
+                log.warning("Couldn't turn %s's Settings window back on: %s", game_id, e)
             self._dispatch(self._native.open_app, game.app.path, False)
 
     def _show_log(self, game_id):
@@ -666,12 +752,16 @@ class SwitchPlayerApp:
         return True
 
     def _ui_state(self):
-        pane = self._settings.get()["build_log_pane"]
-        return {"log_open": pane["open"], "log_width": pane["width"], "log_game": pane["game"]}
+        values = self._settings.get()
+        pane = values["build_log_pane"]
+        return {"log_open": pane["open"], "log_width": pane["width"], "log_game": pane["game"],
+                "settings_advanced": values["settings_advanced"]}
 
     def _set_ui_state(self, values):
         if not isinstance(values, dict):
             return
+        if isinstance(values.get("settings_advanced"), bool):
+            self._settings.update({"settings_advanced": values["settings_advanced"]})
         pane = dict(self._settings.get()["build_log_pane"])
         valid = {"open": lambda v: isinstance(v, bool),
                  "width": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
@@ -773,8 +863,14 @@ class Api:
     def play(self, game_id):
         self._app._play(game_id)
 
-    def open_settings(self, game_id):
-        self._app._open_settings(game_id)
+    def game_settings(self, game_id):
+        return self._app._game_settings(game_id)
+
+    def save_game_settings(self, game_id, values):
+        return self._app._save_game_settings(game_id, values)
+
+    def open_settings_window(self, game_id):
+        self._app._open_settings_window(game_id)
 
     def build(self, game_id):
         self._app._build(game_id)

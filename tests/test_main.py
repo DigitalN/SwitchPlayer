@@ -171,9 +171,25 @@ class FakeNative:
     def __init__(self):
         self.calls = []
         self.answer = True
+        self.prefs = {}  # bundle ID → {key: value}: Game apps' saved choices
+        self.running = False
+
+    def read_choices(self, bundle_id, keys):
+        stored = self.prefs.get(bundle_id, {})
+        return {key: stored[key] for key in keys if isinstance(stored.get(key), str)}
+
+    def write_choices(self, bundle_id, changes):
+        self.calls.append(("write choices", bundle_id, dict(changes)))
+        stored = self.prefs.setdefault(bundle_id, {})
+        for key, value in changes.items():
+            if value is None:
+                stored.pop(key, None)
+            else:
+                stored[key] = value
+        return self.answer
 
     def game_running(self, game):
-        return False
+        return self.running
 
     def confirm(self, message, action="Quit", detail=""):
         self.calls.append(("confirm", message, action, detail))
@@ -184,6 +200,9 @@ class FakeNative:
 
     def open_app(self, path, no_launcher):
         self.calls.append(("open", Path(path), no_launcher))
+
+    def forget_settings_window_choice(self, bundle_id):
+        self.calls.append(("forget window choice", bundle_id))
 
     def reveal(self, path):
         self.calls.append(("reveal", Path(path)))
@@ -225,7 +244,7 @@ def test_play_settings_finder_and_logs_use_the_native_adapter(tmp_path):
 
     assert api.library()["games"][0]["log"] is True
     api.play("Rhythm Heaven")
-    api.open_settings("Rhythm Heaven")
+    api.open_settings_window("Rhythm Heaven")
     api.show_log("Rhythm Heaven")
     api.open_build_log("Rhythm Heaven")
     api.show_in_finder("Rhythm Heaven")
@@ -233,11 +252,210 @@ def test_play_settings_finder_and_logs_use_the_native_adapter(tmp_path):
     game_app = folder / "Rhythm Heaven Groove.app"
     assert native.calls == [
         ("open", game_app, True),
+        # The game's own Settings window, even when the player turned it off at launch.
+        ("forget window choice", "org.nxnative.0100d9f01d474000"),
         ("open", game_app, False),
         ("reveal", game_log),
         ("console", build_log),
         ("reveal", game_app),
     ]
+
+
+GROOVE_SETTINGS = {"schema": 1, "game": "0100D9F01D474000", "settings": [
+    {"env": "DM_OPMODE", "kind": "choice", "section": "Game", "label": "Console mode", "note": "", "default": "0",
+     "level": "basic", "options": [["1", "Docked"], ["0", "Handheld"]]},
+    {"env": "DM_FULLSCREEN", "kind": "choice", "section": "Game", "label": "Display mode", "note": "", "default": "0",
+     "level": "basic", "options": [["0", "Window"], ["1", "Fullscreen"]]},
+    {"env": "DM_RUMBLE", "kind": "toggle", "section": "Controls", "label": "Game rumble", "note": "", "default": "1",
+     "level": "basic", "on": "1", "off": "0"},
+    {"env": "DM_RUMBLE_GAIN", "kind": "range", "section": "Controls", "label": "Rumble strength", "note": "",
+     "default": "1.0", "needs": "DM_RUMBLE=1", "min": 0.0, "max": 3.0, "step": 0.1},
+]}
+
+
+def settings_game(tmp_path, bundle_id=None, settings=GROOVE_SETTINGS):
+    folder = tmp_path / "Switch Games" / "Rhythm Heaven"
+    contents = folder / "Rhythm Heaven Groove.app" / "Contents"
+    (contents / "Resources" / "dm").mkdir(parents=True)
+    info = {"DMTitleID": "0100D9F01D474000", "CFBundleDisplayName": "Rhythm Heaven Groove"}
+    if bundle_id:
+        info["CFBundleIdentifier"] = bundle_id
+    (contents / "Info.plist").write_bytes(plistlib.dumps(info))
+    if settings is not None:
+        (contents / "Resources" / "dm" / "launcher.json").write_text(json.dumps(settings))
+    return folder
+
+
+def settings_api(tmp_path, native, **game):
+    folder = settings_game(tmp_path, **game)
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data",
+                               first_launch=lambda: {"library_folder": str(folder.parent)},
+                               native=native, dispatch=lambda function, *args: function(*args),
+                               save_root=tmp_path / "data" / "nxnative-saves")  # never the player's own env.txt
+    api = main.Api(app)
+    api.library()
+    return api, folder
+
+
+GROOVE = "org.nxnative.0100d9f01d474000"
+
+
+def test_the_settings_panel_shows_saved_choices_defaults_and_fixed_settings(tmp_path):
+    native = FakeNative()
+    native.prefs[GROOVE] = {"launcher.DM_OPMODE": "1", "launcher.DM_RUMBLE_GAIN": "9.00",  # not in this build's range
+                            "launcher.DM_FULLSCREEN": "1"}
+    api, folder = settings_api(tmp_path, native)
+    # The player's env.txt, under the data folder's stand-in for ~/Library/Application Support/nxnative
+    player_env = tmp_path / "data" / "nxnative-saves" / "0100D9F01D474000" / "env.txt"
+    player_env.parent.mkdir(parents=True)
+    player_env.write_text("# fixed for every start\nDM_FULLSCREEN=0\n")
+
+    panel = api.game_settings("Rhythm Heaven")
+
+    assert (panel["name"], panel["status"], panel["running"]) == ("Rhythm Heaven Groove", "ok", False)
+    assert [(row["env"], row["value"], row["fixed"]) for row in panel["rows"]] == [
+        ("DM_OPMODE", "1", False),  # the saved choice
+        ("DM_FULLSCREEN", "0", True),  # the env.txt wins over the saved choice
+        ("DM_RUMBLE", "1", False),  # the tested default
+        ("DM_RUMBLE_GAIN", "1.0", False),  # a saved choice this build doesn't offer: its default
+    ]
+    assert panel["rows"][3]["needs"] == "DM_RUMBLE=1"  # the list's own fields, for the page to draw
+
+
+def test_the_settings_panel_saves_as_the_games_own_window_would(tmp_path):
+    native = FakeNative()
+    native.prefs[GROOVE] = {"launcher.DM_RUMBLE": "0", "launcher.DM_FULLSCREEN": "1"}
+    api, folder = settings_api(tmp_path, native)
+    (folder / "Rhythm Heaven Groove.app" / "Contents" / "Resources" / "dm" / "env.txt").write_text("DM_FULLSCREEN=0\n")
+
+    saved = api.save_game_settings("Rhythm Heaven", {
+        "DM_OPMODE": "1",  # Docked: differs from the tested default, so it's kept
+        "DM_RUMBLE": "1",  # back to the default: forgotten, so a later build's default reaches the player
+        "DM_RUMBLE_GAIN": "1.5",  # a range, as the window's slider writes it
+        "DM_FULLSCREEN": "0",  # fixed by the Game app's env.txt: its saved choice stays
+        "DM_NOT_LISTED": "1",
+    })
+
+    assert saved is True
+    assert native.prefs[GROOVE] == {"launcher.DM_OPMODE": "1", "launcher.DM_RUMBLE_GAIN": "1.50",
+                                    "launcher.DM_FULLSCREEN": "1"}
+
+
+def test_the_settings_panel_ignores_values_the_build_doesnt_offer(tmp_path):
+    native = FakeNative()
+    api, folder = settings_api(tmp_path, native)
+
+    assert api.save_game_settings("Rhythm Heaven", {"DM_OPMODE": "2", "DM_RUMBLE_GAIN": "0x1p-1"}) is True
+    assert native.prefs[GROOVE] == {}
+    assert api.save_game_settings("Rhythm Heaven", "Docked") is False
+    native.answer = False  # the preferences couldn't be written
+    assert api.save_game_settings("Rhythm Heaven", {"DM_OPMODE": "1"}) is False
+
+
+def test_the_settings_panel_says_when_the_game_is_running(tmp_path):
+    native = FakeNative()
+    native.running = True
+    api, folder = settings_api(tmp_path, native)
+
+    assert api.game_settings("Rhythm Heaven")["running"] is True
+
+
+@pytest.mark.parametrize("settings, status", [
+    (None, "none"),  # a Game app with no settings list
+    ({"schema": 1, "settings": []}, "none"),
+    ({"schema": 2, "settings": GROOVE_SETTINGS["settings"]}, "unsupported"),
+    ({"settings": [{**GROOVE_SETTINGS["settings"][0], "kind": "colour"}]}, "unsupported"),
+    ("not a settings list", "unsupported"),
+])
+def test_the_settings_panel_says_when_it_cant_draw_a_list(tmp_path, settings, status):
+    native = FakeNative()
+    api, folder = settings_api(tmp_path, native, settings=settings)
+
+    panel = api.game_settings("Rhythm Heaven")
+
+    assert (panel["status"], panel["rows"]) == (status, [])
+    assert api.save_game_settings("Rhythm Heaven", {"DM_OPMODE": "1"}) is False
+    assert native.prefs == {}
+
+
+def test_a_game_without_a_game_app_has_no_settings_panel(tmp_path):
+    folder = tmp_path / "Switch Games" / "Rhythm Heaven"
+    folder.mkdir(parents=True)
+    (folder / "Rhythm Heaven [0100D9F01D474000].nsp").touch()
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=lambda: {"library_folder": str(folder.parent)},
+                               native=FakeNative())
+    api = main.Api(app)
+    api.library()
+
+    assert api.game_settings("Rhythm Heaven") is None
+    assert api.save_game_settings("Rhythm Heaven", {}) is False
+
+
+def test_the_games_own_settings_window_uses_its_own_preferences_domain(tmp_path):
+    folder = settings_game(tmp_path, bundle_id="com.example.groove")
+    native = FakeNative()
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data",
+                               first_launch=lambda: {"library_folder": str(folder.parent)},
+                               native=native, dispatch=lambda function, *args: function(*args))
+    api = main.Api(app)
+    api.library()
+
+    api.open_settings_window("Rhythm Heaven")
+
+    assert native.calls == [("forget window choice", "com.example.groove"),
+                            ("open", folder / "Rhythm Heaven Groove.app", False)]
+
+
+def test_the_games_own_settings_window_still_opens_when_its_choice_cant_be_removed(tmp_path):
+    folder = settings_game(tmp_path)
+
+    class Refusing(FakeNative):
+        def forget_settings_window_choice(self, bundle_id):
+            raise OSError("cfprefsd refused")
+
+    native = Refusing()
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data",
+                               first_launch=lambda: {"library_folder": str(folder.parent)},
+                               native=native, dispatch=lambda function, *args: function(*args))
+    api = main.Api(app)
+    api.library()
+
+    api.open_settings_window("Rhythm Heaven")
+
+    assert native.calls == [("open", folder / "Rhythm Heaven Groove.app", False)]
+
+
+def test_native_reads_and_writes_only_string_choices(tmp_path):
+    """Against a preferences file in the test's own folder, never a Game app's own."""
+    Foundation = pytest.importorskip("Foundation")
+    domain = str(tmp_path / "org.nxnative.test")
+    Foundation.CFPreferencesSetAppValue("launcher.DM_RENDER_SCALE", 0.75, domain)  # not a string: ignored
+    Foundation.CFPreferencesSetAppValue("launcher.DM_RUMBLE", "0", domain)
+    Foundation.CFPreferencesAppSynchronize(domain)
+    native = main.Native()
+    keys = ["launcher.DM_OPMODE", "launcher.DM_RENDER_SCALE", "launcher.DM_RUMBLE"]
+
+    assert native.read_choices(domain, keys) == {"launcher.DM_RUMBLE": "0"}
+    assert native.write_choices(domain, {"launcher.DM_OPMODE": "1", "launcher.DM_RUMBLE": None}) is True
+    assert native.read_choices(domain, keys) == {"launcher.DM_OPMODE": "1"}
+    assert plistlib.loads((tmp_path / "org.nxnative.test.plist").read_bytes()) == {
+        "launcher.DM_OPMODE": "1", "launcher.DM_RENDER_SCALE": 0.75}
+
+
+def test_native_forgets_only_the_settings_window_choice(tmp_path):
+    """Against a preferences file in the test's own folder (CFPreferences takes a path as a
+    domain), never a Game app's own and nothing in ~/Library/Preferences."""
+    Foundation = pytest.importorskip("Foundation")
+    domain = str(tmp_path / "org.nxnative.test")
+    Foundation.CFPreferencesSetAppValue(main.SETTINGS_WINDOW_CHOICE, False, domain)
+    Foundation.CFPreferencesSetAppValue("launcher.DM_OPMODE", "1", domain)
+    Foundation.CFPreferencesAppSynchronize(domain)
+
+    main.Native().forget_settings_window_choice(domain)
+
+    assert Foundation.CFPreferencesCopyAppValue(main.SETTINGS_WINDOW_CHOICE, domain) is None
+    assert Foundation.CFPreferencesCopyAppValue("launcher.DM_OPMODE", domain) == "1"
+    assert plistlib.loads((tmp_path / "org.nxnative.test.plist").read_bytes()) == {"launcher.DM_OPMODE": "1"}
 
 
 def test_build_prepares_the_isolated_nxnative_script_and_environment(tmp_path, monkeypatch):
@@ -1229,12 +1447,14 @@ def test_a_long_build_log_starts_at_its_last_lines(tmp_path, monkeypatch):
 def test_the_build_log_pane_keeps_its_state(tmp_path):
     app = pane_app(tmp_path)
     api = main.Api(app)
-    assert api.ui_state() == {"log_open": True, "log_width": 380, "log_game": None}
-    api.set_ui_state({"log_open": False, "log_width": 9999, "log_game": "Ocarina of Time"})
+    assert api.ui_state() == {"log_open": True, "log_width": 380, "log_game": None, "settings_advanced": False}
+    api.set_ui_state({"log_open": False, "log_width": 9999, "log_game": "Ocarina of Time", "settings_advanced": True})
     reopened = main.Api(main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=dict))
-    assert reopened.ui_state() == {"log_open": False, "log_width": 720, "log_game": "Ocarina of Time"}
-    api.set_ui_state({"log_width": "wide", "log_open": "yes"})  # anything else is ignored
-    assert api.ui_state() == {"log_open": False, "log_width": 720, "log_game": "Ocarina of Time"}
+    assert reopened.ui_state() == {"log_open": False, "log_width": 720, "log_game": "Ocarina of Time",
+                                   "settings_advanced": True}
+    api.set_ui_state({"log_width": "wide", "log_open": "yes", "settings_advanced": 1})  # anything else is ignored
+    assert api.ui_state() == {"log_open": False, "log_width": 720, "log_game": "Ocarina of Time",
+                              "settings_advanced": True}
     api.set_ui_state(None)
 
 

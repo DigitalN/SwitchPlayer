@@ -17,6 +17,10 @@
 //            update-run (a whole automatic update, from Checking to Updated) update-none (Checking, then Up to date!)
 //   pane:    closed (the Build Log pane hidden, as a player may leave it)
 //            copy-fails (Copy Log can't put the log on the clipboard)
+//   settings: settings (every game built, Rhythm Heaven's Settings panel open) settings-advanced (its
+//            Advanced settings open) settings-running (the game is running) settings-fixed (env.txt
+//            fixes two settings) settings-scale (a Render scale with its picture sizes) settings-none
+//            (no settings list) settings-unsupported (a list it can't draw) settings-save-fails
 //   theme:   dark light
 // Change window.__state while it runs to try anything else; the next poll picks it up.
 // window.__state.calls is every API call the page made. Page errors that the app would log
@@ -39,9 +43,36 @@
     copy_fails: false,  // Copy Log can't copy
     calls: [],
     logs: {},  // game id → { key, lines }: each game's last Build log
-    ui: { log_open: true, log_width: 380, log_game: null },
+    ui: { log_open: true, log_width: 380, log_game: null, settings_advanced: false },
+    // The Settings panel: every Game app here carries Rhythm Heaven Groove's settings list.
+    settings_list: null,  // set below, once GROOVE_SETTINGS exists
+    settings_status: 'ok',  // or 'none', 'unsupported'
+    prefs: {},  // game id → { env: value }: its saved choices
+    fixed: {},  // env → value: what an env.txt sets
+    running: false,
+    save_fails: false,
+    open_settings: null,  // a game id: its Settings panel opens at launch
   };
   const game = id => state.games.find(g => g.id === id);
+
+  // Rhythm Heaven Groove's settings list, as its Game app carries it (Contents/Resources/dm/launcher.json).
+  const GROOVE_SETTINGS = [
+    { env: 'DM_OPMODE', kind: 'choice', section: 'Game', label: 'Console mode', note: '', default: '0', level: 'basic', options: [['1', 'Docked'], ['0', 'Handheld']] },
+    { env: 'DM_PRESENT_UPSCALE', kind: 'choice', section: 'Game', label: 'Upscaling', note: 'Uses more GPU time and can increase heat.', default: 'off', options: [['off', 'Standard'], ['metalfx', 'MetalFX']] },
+    { env: 'DM_LANG', kind: 'choice', section: 'Game', label: 'Game language', note: '', default: 'en-US', level: 'basic', options: [['en-US', 'American English'], ['en-GB', 'British English'], ['ja', 'Japanese'], ['fr', 'French'], ['de', 'German'], ['es-419', 'Latin American Spanish'], ['es', 'Spanish'], ['it', 'Italian'], ['nl', 'Dutch'], ['fr-CA', 'Canadian French'], ['ko', 'Korean'], ['zh-Hant', 'Traditional Chinese'], ['zh-Hans', 'Simplified Chinese']] },
+    { env: 'DM_FULLSCREEN', kind: 'choice', section: 'Game', label: 'Display mode', note: '', default: '0', level: 'basic', options: [['0', 'Window'], ['1', 'Fullscreen']] },
+    { env: 'DM_RUMBLE', kind: 'toggle', section: 'Controls', label: 'Game rumble', note: '', default: '1', level: 'basic', on: '1', off: '0' },
+    { env: 'DM_RUMBLE_GAIN', kind: 'range', section: 'Controls', label: 'Rumble strength', note: '', default: '1.0', needs: 'DM_RUMBLE=1', min: 0.0, max: 3.0, step: 0.1 },
+    { env: 'DM_RUMBLE_MIN', kind: 'range', section: 'Controls', label: 'Rumble cutoff', note: '', default: '0', min: 0.0, max: 0.9, step: 0.05 },
+    { env: 'DM_PAD_PRESS_TO_JOIN', kind: 'toggle', section: 'Controls', label: 'Press a button to join', note: '', default: '0', on: '1', off: '0' },
+    { env: 'DM_PRESENT_SNAP', kind: 'toggle', section: 'Performance', label: 'Frame buffering', note: 'Up to one frame more display latency.', default: '0', on: '1', off: '0' },
+    { env: 'DM_PSO_MTL4', kind: 'toggle', section: 'Performance', label: 'Metal 4 pipelines', note: 'Keeps a pipeline archive; uses more memory.', default: '1', on: '1', off: '0' },
+    { env: 'DM_PSO_PREBUILD', kind: 'toggle', section: 'Performance', label: 'Pipeline prebuild', note: 'The first start waits a few minutes for it, once.', default: '1', needs: 'DM_PSO_MTL4=1', on: '1', off: '0' },
+    { env: 'DM_NVN_ENC_THREAD', kind: 'toggle', section: 'Performance', label: 'Encode thread', note: '', default: '0', on: '1', off: '0' },
+    { env: 'DM_METAL_HUD', kind: 'toggle', section: 'Performance', label: 'Performance HUD', note: '', default: '0', on: '1', off: '0' },
+  ];
+  state.settings_list = GROOVE_SETTINGS;
+  const isDefault = (r, v) => r.kind === 'range' ? Math.abs(Number(v) - Number(r.default)) < 1e-6 : v === r.default;
   const at = i => state.games[i] || {};
 
   // A Mac app build's stages, by nxnative's names, how many seconds each takes here, and what
@@ -197,6 +228,20 @@
       Object.assign(named('Rhythm'), { state: 'ready', app: true, log: true, build_log: true });
     },
     closed: () => { state.ui.log_open = false; },
+    settings: () => {
+      state.games.forEach(g => Object.assign(g, { state: 'ready', app: true, log: true }));
+      state.open_settings = named('Rhythm').id;
+    },
+    'settings-advanced': () => { state.ui.settings_advanced = true; },
+    'settings-running': () => { state.running = true; },
+    'settings-fixed': () => { state.fixed = { DM_FULLSCREEN: '1', DM_PSO_MTL4: '2' }; },
+    'settings-scale': () => {
+      state.settings_list = [GROOVE_SETTINGS[0], { env: 'DM_RENDER_SCALE', kind: 'range', section: 'Game', label: 'Render scale', note: '',
+        default: '1.0', level: 'basic', min: 0.5, max: 1.0, step: 0.05, base: { docked: [1600, 900], handheld: [1280, 720] } }, ...GROOVE_SETTINGS.slice(1)];
+    },
+    'settings-none': () => { state.settings_status = 'none'; },
+    'settings-unsupported': () => { state.settings_status = 'unsupported'; },
+    'settings-save-fails': () => { state.save_fails = true; },
     'copy-fails': () => { state.copy_fails = true; },
     building: () => {
       Object.assign(at(0), { state: 'building' }); newLog(at(0)); startStage(at(0), 9, 0.42); at(0).progress.at = 0.42 * 8; at(0).progress.eta = 280;
@@ -317,7 +362,26 @@
     art: id => state.art[id] || null,
     choose_library: () => { state.folder_name = app.library.name; state.games = app.games.map(fresh); },
     play: id => console.log(`Preview: would open ${game(id).name}.app with --no-launcher`),
-    open_settings: id => console.log(`Preview: would open ${game(id).name}.app with its Settings window`),
+    game_settings: id => {
+      const g = game(id);
+      if (!g || !g.app) return null;
+      const saved = state.prefs[id] || {};
+      const rows = state.settings_status !== 'ok' ? [] : state.settings_list.map(r => r.env in state.fixed
+        ? { ...r, value: state.fixed[r.env], fixed: true } : { ...r, value: saved[r.env] ?? r.default, fixed: false });
+      return { name: g.name, status: state.settings_status, running: state.running, rows };
+    },
+    save_game_settings: (id, values) => {
+      if (state.save_fails) return false;
+      const saved = state.prefs[id] = { ...(state.prefs[id] || {}) };
+      for (const r of state.settings_list) {
+        if (r.env in state.fixed || !(r.env in values)) continue;
+        if (isDefault(r, values[r.env])) delete saved[r.env];
+        else saved[r.env] = r.kind === 'range' ? Number(values[r.env]).toFixed(2) : values[r.env];
+      }
+      console.log(`Preview: saved ${game(id).name}'s choices`, JSON.stringify(saved));
+      return true;
+    },
+    open_settings_window: id => console.log(`Preview: would open ${game(id).name}.app with its own Settings window`),
     build: id => {
       const g = game(id);
       if (g.state === 'building' || g.state === 'waiting') return;
@@ -378,6 +442,7 @@
         else console.error(`Preview: no scenario "${s}". Scenarios: ${Object.keys(scenarios).join(', ')}`);
       }
       setTimeout(() => window.dispatchEvent(new Event('pywebviewready')), 0);
+      if (state.open_settings) setTimeout(() => editSettings(state.open_settings), 300);
     },
   };
 })();

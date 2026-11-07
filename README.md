@@ -11,7 +11,7 @@ A Mac app that builds and plays your own Switch games through [nxnative](https:/
 - Shows your Library as a grid, with each game's own name and eShop artwork.
 - Builds a Mac Game app for each game with nxnative, one Build at a time, with progress and Stop, and a Build Log beside your Library to follow a long Build line by line.
 - Builds Switch 2 games too, from a `.nup` file or a folder of their files, as nxnative does.
-- Plays a built game straight from its artwork, or opens its own Settings window.
+- Plays a built game straight from its artwork, and changes its settings (docked or handheld, language, display mode and more) in a panel of its own.
 - Tells you when nxnative has changes for a game you've built, and which ones are worth a rebuild.
 - Picks up where NX Play left off: its Library folder, keys file, builds and saves.
 
@@ -45,7 +45,7 @@ To bring a save across again later, choose **Import NX Play Save…** from the g
 
 ## Each game's menu
 
-Click **⋯** or right-click a game for its **Settings…** window, **Build Options…**, **Show Log**, **Show Build Log**, **Show in Finder**, **Rebuild** and **Import NX Play Save…**.
+Click **⋯** or right-click a game for **Settings…**, **Build Options…**, **Show Log**, **Show Build Log**, **Show in Finder**, **Rebuild** and **Import NX Play Save…**. Settings… shows the game's settings, the basic ones first: docked or handheld is **Console mode**. **Save** keeps them for the game's next start.
 
 ![The ⋯ menu for a game that's ready to play](docs/images/menu.png)
 
