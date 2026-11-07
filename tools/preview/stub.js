@@ -7,8 +7,14 @@
 //   library: (default: as it is now, nothing built yet) building ready failed noart many empty nofolder readme
 //            preparing (Ocarina downloading nxnative, held still) installing (Ocarina installing the Python
 //            packages, held still) ocarina (Ocarina at its shaders, held still)
-//   setup:   setup-ready (Build Setup with everything ready, where Not Now becomes Done)
-//            install-fails (Install Build Tools can't install)
+//   setup:   (default: everything a Build needs is ready, so Build Setup opens only from the menu:
+//            run showSetup() to see it) setup-missing (something is missing, so it opens at launch)
+//            install-fails (the Build tools are missing, and Install Build Tools can't install them)
+//   update:  the App update toast, held still: update-checking update-downloading update-verifying
+//            update-ready update-held (held for a Build) update-installing update-uptodate
+//            update-updated (the launch after an update) update-off (outside Applications)
+//            update-failed (Check for Updates… couldn't: stays until closed) update-failed-auto (fades)
+//            update-run (a whole automatic update, from Checking to Updated) update-none (Checking, then Up to date!)
 //   pane:    closed (the Build Log pane hidden, as a player may leave it)
 //   theme:   dark light
 // Change window.__state while it runs to try anything else; the next poll picks it up.
@@ -26,7 +32,8 @@
     games: app.games.map(fresh),
     art: Object.fromEntries(app.games.map(g => [g.id, g.art_data])),
     queue: [],  // ids waiting, in order
-    setup_ready: false,  // Build Setup finds everything ready
+    setup_ready: true,  // Build Setup finds everything ready, as on the maintainer's Mac
+    update: null,  // the App update toast (updater.Updater.toast), or null
     install_fails: false,  // Install Build Tools can't install
     calls: [],
     logs: {},  // game id → { key, lines }: each game's last Build log
@@ -141,6 +148,33 @@
     startStage(g, k);
   }
 
+  // The App update toast, as the updater gives it: a new id for each new step or result. A
+  // result that fades is gone TOAST_KEEP seconds after it began.
+  const TOAST_KEEP = 15000;
+  let toastIds = 0, updateTimers = [];
+  function setUpdate(kind, extra = {}) {
+    const same = state.update && state.update.kind === kind;
+    const fades = ['up_to_date', 'updated', 'off'].includes(kind) || (kind === 'failed' && !extra.sticky);
+    state.update = { id: same ? state.update.id : ++toastIds, kind, version: null, progress: null, reason: null,
+                     stage: null, sticky: false, fades, at: same ? state.update.at : Date.now(), ...extra };
+  }
+  const later = (ms, f) => updateTimers.push(setTimeout(f, ms));
+  function runUpdate(found) {
+    setUpdate('checking');
+    if (!found) { later(1500, () => setUpdate('up_to_date')); return; }
+    later(1500, () => {
+      setUpdate('downloading', { version: '0.1.4', progress: 0 });
+      for (let i = 1; i <= 16; i++) later(i * 250, () => setUpdate('downloading', { version: '0.1.4', progress: i / 16 }));
+      later(4300, () => setUpdate('verifying', { version: '0.1.4' }));
+      later(6000, () => setUpdate('ready', { version: '0.1.4' }));
+    });
+  }
+  function installUpdate() {
+    if (state.update?.kind !== 'ready') return;
+    setUpdate('installing', { version: '0.1.4' });
+    later(1500, () => { console.log('Preview: would quit, swap in 0.1.4 and reopen'); setUpdate('updated', { version: '0.1.4' }); });
+  }
+
   const named = name => state.games.find(g => g.name.includes(name)) || {};
   const scenarios = {
     preparing: () => {
@@ -174,8 +208,24 @@
       say(g, '── Downloading nxnative', ...PREP['Downloading nxnative'], '── Installing Python packages', ...PREP['Installing Python packages'].slice(0, 3));
       g.progress = { preparing: 'Installing Python packages', elapsed: 12 };
     },
-    'setup-ready': () => { state.setup_ready = true; },
-    'install-fails': () => { state.install_fails = true; },
+    'setup-missing': () => { state.setup_ready = false; },
+    'setup-ready': () => { state.setup_ready = true; },  // the default, kept for older links
+    'update-checking': () => setUpdate('checking'),
+    'update-downloading': () => setUpdate('downloading', { version: '0.1.4', progress: 0.42 }),
+    'update-verifying': () => setUpdate('verifying', { version: '0.1.4' }),
+    'update-ready': () => setUpdate('ready', { version: '0.1.4' }),
+    'update-held': () => { setUpdate('ready', { version: '0.1.4' }); state.held = true; },
+    'update-installing': () => setUpdate('installing', { version: '0.1.4' }),
+    'update-uptodate': () => setUpdate('up_to_date'),
+    'update-updated': () => setUpdate('updated', { version: '0.1.4' }),
+    'update-off': () => setUpdate('off', { reason: 'move Switch Player to your Applications folder' }),
+    'update-failed': () => setUpdate('failed', { stage: 'check', sticky: true,
+      reason: "Couldn't reach GitHub (curl: (6) Could not resolve host: api.github.com)." }),
+    'update-failed-auto': () => setUpdate('failed', { stage: 'check',
+      reason: "Couldn't reach GitHub (curl: (6) Could not resolve host: api.github.com)." }),
+    'update-run': () => runUpdate(true),
+    'update-none': () => runUpdate(false),
+    'install-fails': () => { state.install_fails = true; state.setup_ready = false; },
     ready: () => {
       state.games.forEach(g => Object.assign(g, { state: 'ready', app: true, log: true }));
       at(0).out_of_date = true;
@@ -236,6 +286,13 @@
       folder_name: state.folder_name,
       // a plain copy, as the bridge sends, without the simulation's own fields
       games: state.games.map(g => ({ ...g, progress: g.progress && (({ secs, at, rest, said, ...p }) => p)(g.progress) })),
+      update: (() => {
+        const u = state.update;
+        if (!u || u.id === state.dismissed || (u.fades && !state.still && Date.now() - u.at > TOAST_KEEP)) return null;
+        const { at, ...shown } = u;
+        // held: a Build is running or waiting, or the update-held scenario says so
+        return u.kind === 'ready' ? { ...shown, held: !!state.held || state.games.some(g => g.state === 'building' || g.state === 'waiting') } : shown;
+      })(),
     }),
     // A piece of the game's Build log from `offset` (here a line count), all of it again when
     // the log is another one than `key` names.
@@ -288,6 +345,9 @@
         ],
       };
     },
+    install_update: () => installUpdate(),
+    dismiss_update: id => { state.dismissed = id; },
+    open_releases_page: () => console.log('Preview: would open https://github.com/DigitalN/SwitchPlayer/releases'),
     import_nxplay_save: id => { console.log(`Preview: would ask, then import ${game(id).name}'s NX Play save`); return true; },
     install_tools: () => {
       console.log(`Preview: would install the Brewfile tools${state.install_fails ? ', and fail' : ''}`);

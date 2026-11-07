@@ -73,3 +73,7 @@ _Avoid_: update (on its own)
 **App update**:
 A new release of Switch Player itself, which Switch Player installs.
 _Avoid_: update (on its own)
+
+**Update toast**:
+The pill at the bottom of the window that says what an App update is doing (checking, downloading, installing) and how it ended.
+_Avoid_: notification (a Build's end is a macOS notification), banner

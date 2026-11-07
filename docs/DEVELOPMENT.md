@@ -79,6 +79,7 @@ The bundle identifier must be `com.digitaln.switchplayer`, the architecture arm6
 - [ ] A higher-version, same-team signed app downloads, verifies, swaps and relaunches from a stand-in release.
 - [ ] A modified app, an ad-hoc app, a different team and a release whose internal version is not newer are refused.
 - [ ] A running or waiting Build holds automatic relaunch.
+- [ ] The toast shows each step: Checking for updates…, Downloading with its %, Checking the download…, ready with Install Now, Installing…, then "Updated to …" in the new copy.
 - [ ] Delete the test copy, data folder and test disk images afterwards.
 
 ### Publish
@@ -92,17 +93,18 @@ gh release create v<version> dist/Switch-Player-<version>.dmg --title "Switch Pl
 
 - [ ] Turn the previous release into a draft so the page lists only the current one: `gh release edit v<previous> --draft=true`.
 - [ ] Check `https://github.com/DigitalN/SwitchPlayer/releases/latest` and the downloaded image's SHA-256 against the local file.
-- [ ] An older installed copy finds the update through **Check for Updates…** or the next wake. Its log shows `Downloading`, `ready to install`, `Installed …; relaunching`, then the new copy starting.
+- [ ] An older installed copy finds the update through **Check for Updates…** or its next launch. Its log shows `Downloading`, `ready to install`, `Installed …; relaunching`, then the new copy starting.
 
 ## How updates work
 
 `Application Files/updater.py` and the bundle/relaunch helpers in `launch.py` are adapted from Mac Engine Room.
 
-- **When:** once a day, one minute after the Mac wakes. **Check for Updates…** checks immediately. A failed network request does not count as the day's check.
+- **When:** at every launch, and in an app left open, once 24 hours have passed since the last check that got through (`last-update-check` in the data folder): an hourly timer looks, and so does a look one minute after the Mac wakes. A check that can't reach GitHub doesn't count: the next hourly look tries again, without a toast. **Check for Updates…** checks immediately; during an automatic check, it makes that check the player's. The launch after an App update skips its check (`installed-update` in the data folder: the toast says "Updated to …" instead).
 - **Feed:** GitHub's latest-release API, through `/usr/bin/curl` and the system certificates. Drafts and pre-releases are excluded by GitHub. The release needs a `.dmg` asset.
 - **Verification:** the app is found by bundle identifier, not filename. `codesign --verify --deep --strict` requires that identifier, an Apple generic anchor and this copy's team. The version inside the image must be newer than the installed version.
-- **Installation:** automatic updates wait for ten seconds without keyboard or mouse input and for the Build queue to be idle. The app is swapped with one `NSFileManager` replacement call and relaunched after the old process exits. The relaunch retries once if Launch Services has not caught up.
-- **Off:** source checkouts, ad-hoc copies, apps outside Applications and apps that cannot replace themselves do not self-update. Check for Updates… opens the releases page instead.
+- **The toast:** `Updater.toast()` goes to the page with the Library each second, and a new step nudges the page to ask at once. The page writes the words (`toastView` in `index.html`); a result that fades shows for four seconds from when the page first sees it, and is dropped after fifteen if no page did.
+- **Installation:** automatic updates wait for ten seconds without keyboard or mouse input, or for **Install Now** in the toast, and for the Build queue to be idle. "Installing…" shows for a second and a half before the app quits. The app is swapped with one `NSFileManager` replacement call and relaunched after the old process exits. The relaunch retries once if Launch Services has not caught up.
+- **Off:** source checkouts, ad-hoc copies, apps outside Applications and apps that cannot replace themselves do not self-update. Check for Updates… opens the releases page instead. The last two say "Updates are off: …" in the toast at launch.
 - **Testing:** `SWITCHPLAYER_UPDATE_FEED` can point to a stand-in JSON response, including a `file://` URL. Signature checks still apply. Relaunch preserves `SWITCHPLAYER_DATA_DIR` and `SWITCHPLAYER_UPDATE_FEED` for an isolated test copy.
 
 Releases use an Apple Development certificate, not Developer ID or notarization. The first-launch card explains **System Settings → Privacy & Security → Open Anyway**. Renew the certificate before it expires and keep the same team.

@@ -73,9 +73,11 @@ main { flex: 1; min-width: 0; height: 100%; overflow-y: auto; padding: 0 24px 32
 .tool svg { flex: none; width: 16px; height: 16px; }
 
 /* ── the grid ────────────────────────────────── */
+/* Art stays 200 px square at any window width: a wider window fits more columns, centred, and
+   the art never grows and snaps back as a column comes and goes. 200 px is the most that keeps
+   four columns in the 960 px window the app opens with. */
 .grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 26px 22px;
-  max-width: 1240px; margin: 0 auto;
+  display: grid; grid-template-columns: repeat(auto-fill, 200px); gap: 26px 22px; justify-content: center;
 }
 .tile { min-width: 0; }
 .art {
@@ -251,6 +253,38 @@ dialog input:focus { outline: 3px solid color-mix(in srgb, var(--accent) 45%, tr
 .btn { padding: 3px 14px; border: 0; border-radius: 6px; background: var(--btn); }
 .btn:hover { background: var(--btn-hover); }
 .btn.primary { background: var(--accent); color: #fff; }
+
+/* ── the App update toast ────────────────────── */
+/* A pill at the bottom centre: what an App update is doing, then how it ended. It's a popover,
+   so it sits in the top layer, and shown again after a dialog opens it stays above it. */
+.toast {
+  position: fixed; inset: auto 0 20px; width: max-content; max-width: min(560px, calc(100vw - 32px)); height: auto;
+  margin: 0 auto; padding: 7px 8px 7px 14px; border: 0; border-radius: 17px; overflow: visible;
+  display: flex; align-items: center; gap: 9px; min-height: 34px;
+  background: var(--menu); color: var(--text); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
+  box-shadow: 0 8px 28px rgba(0,0,0,.22), 0 0 0 .5px var(--line-strong);
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
+  opacity: 1; transform: translateY(0); transition: opacity .25s, transform .25s;
+}
+.toast:not(:popover-open) { display: none; }
+.toast[data-out] { opacity: 0; transform: translateY(6px); }
+@starting-style { .toast:popover-open { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+.toast.plain { padding-right: 14px; }  /* no button at its end */
+.toast .spinner { margin-left: -2px; }
+.toast-text { min-width: 0; line-height: 1.35; }
+.toast.failed .toast-text { color: var(--danger); }
+.toast.failed .toast-text b { color: var(--text); font-weight: 600; }
+.toast-btn {
+  flex: none; border: 0; border-radius: 11px; padding: 2px 10px; font-size: 11.5px; font-weight: 600;
+  background: var(--accent); color: #fff; white-space: nowrap;
+}
+.toast-btn:active { opacity: .7; }
+.toast-x {
+  flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 11px;
+  background: transparent; color: var(--muted); font-size: 12px; line-height: 1;
+}
+.toast-x:hover { background: var(--btn); color: var(--text); }
 </style>
 </head>
 <body>
@@ -300,6 +334,12 @@ dialog input:focus { outline: 3px solid color-mix(in srgb, var(--accent) 45%, tr
   <p id="setup-error" hidden></p>
   <div class="actions"><button class="btn" id="setup-close">Not Now</button><button class="btn" id="setup-recheck">Check Again</button><button class="btn primary" id="setup-install" hidden>Install Build Tools</button></div>
 </dialog>
+
+<div class="toast" id="toast" popover="manual" role="status" aria-live="polite">
+  <i class="spinner" id="toast-spin" hidden></i><span class="toast-text" id="toast-text"></span>
+  <button class="toast-btn" id="toast-action" hidden></button>
+  <button class="toast-x" id="toast-close" aria-label="Close" title="Close" hidden>✕</button>
+</div>
 
 <script>
 'use strict';
@@ -474,6 +514,7 @@ function render(lib) {
   for (const [id, t] of tiles) if (!seen.has(id)) { t.el.remove(); tiles.delete(id); }
   if (menuFor && !seen.has(menuFor.game.id)) closeMenu();
   renderPane(games);
+  renderToast(lib.update || null);
 }
 
 // ── polling ─────────────────────────────────────────────
@@ -490,6 +531,76 @@ async function poll() {
   if (document.visibilityState === 'visible') pollTimer = setTimeout(poll, POLL_MS);
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') poll(); });
+// The app asks for a poll now when an App update toast changes (main.py), once the page is set up.
+let booted = false;
+function nudge() { if (booted) poll(); }
+
+// ── the App update toast ────────────────────────────────
+// The updater's toast (Updater.toast): each step while it works, then how it ended. A result
+// that fades shows for TOAST_MS from when this page first sees it; one that stays (a failure the
+// player asked about, an update held for a Build) has a × that closes it.
+const toast = $('toast'), TOAST_MS = 4000;
+let toastId = null, toastTimer = null, toastAct = null;
+const toastSeen = new Set();  // ids shown long enough, or closed
+
+function toastView(u) {
+  const app = u.version ? `Switch Player ${u.version}` : 'Switch Player';
+  switch (u.kind) {
+    case 'checking': return { text: 'Checking for updates…', spin: true };
+    case 'downloading': return { text: `Downloading ${app}…${isNum(u.progress) ? ` ${Math.floor(u.progress * 100)}%` : ''}`, spin: true };
+    case 'verifying': return { text: 'Checking the download…', spin: true };
+    case 'ready': return u.held ? { text: `${app} will install when the Build ends`, close: true }
+                                : { text: `${app} is ready`, act: ['Install Now', 'install_update'] };
+    case 'installing': return { text: `Installing ${app}… It will reopen.`, spin: true };
+    case 'up_to_date': return { text: 'Up to date!' };
+    case 'updated': return { text: `Updated to ${app}` };
+    case 'off': return { text: `Updates are off: ${u.reason}` };
+    case 'failed': {
+      const what = u.stage === 'check' ? "Couldn't check for updates." : `Couldn't update to ${app}.`;
+      return { html: `<b>${esc(what)}</b> ${esc(u.reason || '')}`, failed: true,
+               ...(u.sticky ? { act: ['Open Releases Page', 'open_releases_page'], close: true } : {}) };
+    }
+    default: return null;
+  }
+}
+
+function renderToast(u) {
+  const view = u && !toastSeen.has(u.id) ? toastView(u) : null;
+  if (!view) { hideToast(); return; }
+  if (u.id !== toastId) {
+    toastId = u.id;
+    clearTimeout(toastTimer);
+    toastTimer = u.fades ? setTimeout(() => { toastSeen.add(u.id); hideToast(); }, TOAST_MS) : null;
+  }
+  put($('toast-spin'), 'hidden', !view.spin);
+  put($('toast-text'), 'html', view.html || esc(view.text));
+  toastAct = view.act ? view.act[1] : null;
+  put($('toast-action'), 'hidden', !view.act);
+  if (view.act) put($('toast-action'), 'text', view.act[0]);
+  put($('toast-close'), 'hidden', !view.close);
+  put(toast, 'class', `toast${view.failed ? ' failed' : ''}${view.act || view.close ? '' : ' plain'}`);
+  if ('out' in toast.dataset) delete toast.dataset.out;  // a new toast while the last one fades
+  if (!toast.matches(':popover-open')) toast.showPopover();
+}
+
+function hideToast() {
+  if (!toast.matches(':popover-open') || 'out' in toast.dataset) return;
+  toast.dataset.out = '';
+  setTimeout(() => { if ('out' in toast.dataset) { toast.hidePopover(); delete toast.dataset.out; } }, 260);
+}
+
+// After a dialog opens, the toast goes back on top of it. (The dialog makes the rest of the page
+// inert, so the toast's buttons wait until it closes.)
+function raiseToast() {
+  if (toast.matches(':popover-open')) { toast.hidePopover(); toast.showPopover(); }
+}
+
+$('toast-action').addEventListener('click', () => { if (toastAct) call(toastAct); });
+$('toast-close').addEventListener('click', () => {
+  toastSeen.add(toastId);
+  hideToast();
+  call('dismiss_update', toastId);
+});
 
 async function call(name, ...args) {
   try { return await api()[name](...args); }
@@ -742,6 +853,7 @@ function editOptions(t) {
   $('options-game').textContent = t.game.name;
   $('options-input').value = t.game.options || '';
   $('options').showModal();
+  raiseToast();
   $('options-input').focus();
 }
 async function saveOptions() {
@@ -753,23 +865,30 @@ $('options-save').addEventListener('click', saveOptions);
 $('options-cancel').addEventListener('click', () => $('options').close());
 $('options-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveOptions(); } });
 
-// ── first-launch setup ──────────────────────────────────
+// ── Build Setup ─────────────────────────────────────────
+// Checked at every launch, but shown then only when something a Build needs is missing;
+// Build Setup… in the menu shows it whatever it finds.
 let setupSeen = false, setupBusy = false;
-async function showSetup(options = {}) {  // options.keepError: a failed install's message stays up
+// options.keepError: a failed install's message stays up. options.ifMissing: the launch's check.
+async function showSetup(options = {}) {
   if (setupBusy) return;
   setupBusy = true;
   if (!options.keepError) $('setup-error').hidden = true;
   $('setup-recheck').disabled = true;
   try {
     const result = await api().setup();
+    if (options.ifMissing && result.ready) return;
     $('setup-list').innerHTML = (result.items || []).map(item => `
       <li><b>${item.ready ? '✓' : '○'} ${esc(item.name)}</b><span class="${item.ready ? '' : 'pending'}">${esc(item.detail)}</span></li>`).join('');
     $('setup-install').hidden = !(result.items || []).some(item => item.action === 'install');
     $('setup-close').textContent = result.ready ? 'Done' : 'Not Now';
-    if (!$('setup').open) $('setup').showModal();
-  } catch (e) { reportError(`setup: ${e.message || e}`); }
-  setupBusy = false;
-  $('setup-recheck').disabled = false;
+    if (!$('setup').open) { $('setup').showModal(); raiseToast(); }
+  } catch (e) {
+    reportError(`setup: ${e.message || e}`);
+  } finally {
+    setupBusy = false;
+    $('setup-recheck').disabled = false;
+  }
 }
 $('setup-close').addEventListener('click', () => $('setup').close());
 $('setup-recheck').addEventListener('click', showSetup);
@@ -799,8 +918,9 @@ window.addEventListener('unhandledrejection', e => reportError(`Unhandled: ${e.r
 window.addEventListener('pywebviewready', async () => {
   try { Object.assign(ui, await api().ui_state()); } catch (e) { reportError(`ui_state: ${e.message || e}`); }
   applyUi();
+  booted = true;
   poll();
-  if (!setupSeen) { setupSeen = true; showSetup(); }
+  if (!setupSeen) { setupSeen = true; showSetup({ ifMissing: true }); }
 });
 </script>
 </body>
