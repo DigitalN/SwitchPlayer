@@ -2,6 +2,7 @@ import base64
 import json
 import plistlib
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -323,9 +324,11 @@ def test_library_throttles_scans_and_updates_missing_titles_in_the_background(tm
     )
     updates = []
     finished = []
+    release = [threading.Event(), threading.Event()]  # each lookup ends only when the test says
 
     def update(tids):
         updates.append(tids)
+        release[len(updates) - 1].wait(5)
         (data / "titledb" / "art").mkdir(parents=True, exist_ok=True)
         (data / "titledb" / "index.json").write_text(json.dumps({
             "fetched": 0, "titles": {tid: {"name": "Rhythm Heaven Groove", "icon": None}}, "missing": [],
@@ -339,13 +342,19 @@ def test_library_throttles_scans_and_updates_missing_titles_in_the_background(tm
     monkeypatch.setattr(main.time, "monotonic", lambda: next(ticks, 104))
     api = main.Api(app)
 
+    def wait_for(count):
+        deadline = clock() + 5
+        while len(finished) < count and clock() < deadline:
+            time.sleep(0.02)
+
     assert api.library()["games"][0]["name"] == "Rhythm Heaven"
-    assert api.library()["games"][0]["name"] == "Rhythm Heaven"
+    assert api.library()["games"][0]["name"] == "Rhythm Heaven"  # throttled: no second scan, no second lookup
+    release[0].set()
+    wait_for(1)  # the first lookup ends before the next game appears
     (library_folder / "Another [0100000000010000].nup").touch()
     assert len(api.library()["games"]) == 2
-    deadline = clock() + 5
-    while len(finished) < 2 and clock() < deadline:
-        time.sleep(0.02)
+    release[1].set()
+    wait_for(2)
 
     assert updates == [[tid], ["0100000000010000"]]
     assert finished == updates
@@ -545,25 +554,59 @@ def test_run_wires_the_real_page_to_a_private_pywebview_window(tmp_path):
     assert menu.items[4].action == app.check_nxnative
 
 
-def test_page_library_choice_uses_the_native_dispatcher(tmp_path):
+def test_page_library_choice_runs_off_the_main_thread(tmp_path):
+    """pywebview's folder panel queues itself onto the main thread and waits for it, so it freezes
+    the app when asked to run there: the fake refuses to run inside the dispatcher, as it does."""
     games = tmp_path / "Games"
     games.mkdir()
+    on_main_thread = []
 
     class PickerNative(FakeNative):
         def choose_folder(self, window):
+            assert not on_main_thread, "pywebview's folder panel waits on the main thread, which is this one"
             return (str(games),)
 
-    dispatched = []
-    app = main.SwitchPlayerApp(
-        data_dir=tmp_path / "data", first_launch=dict, native=PickerNative(),
-        dispatch=lambda function, *args: (dispatched.append(function.__name__), function(*args))[1],
-    )
+    def dispatch(function, *args):
+        on_main_thread.append(True)
+        try:
+            return function(*args)
+        finally:
+            on_main_thread.pop()
+
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=dict, native=PickerNative(),
+                               dispatch=dispatch)
     app.attach_window(object())
 
     main.Api(app).choose_library()
 
-    assert dispatched == ["choose_library"]
     assert main.Api(app).library()["folder_name"] == "Games"
+
+
+def test_a_game_is_running_by_its_apps_own_bundle_id(tmp_path, monkeypatch):
+    asked = []
+
+    class Running:
+        @staticmethod
+        def runningApplicationsWithBundleIdentifier_(bundle_id):
+            asked.append(bundle_id)
+            return [object()] if bundle_id == "com.example.packed-elsewhere" else []
+
+    monkeypatch.setitem(sys.modules, "AppKit", type("AppKit", (), {"NSRunningApplication": Running}))
+    tid = "0100D9F01D474000"
+    folder = tmp_path / "Rhythm Heaven"
+    for file_name, extra in (("Packed.app", {"CFBundleIdentifier": "com.example.packed-elsewhere"}),
+                             ("Default.app", {})):
+        contents = folder / file_name / "Contents"
+        contents.mkdir(parents=True, exist_ok=True)
+        (contents / "Info.plist").write_bytes(plistlib.dumps({"DMTitleID": tid, **extra}))
+    game = main.library.Game(id="Rhythm Heaven", path=folder, title_id=tid, app=main.library.read_app(folder / "Packed.app"))
+
+    assert main.Native().game_running(game) is True
+    assert asked == ["com.example.packed-elsewhere"]
+
+    game.app = main.library.read_app(folder / "Default.app")  # no identifier recorded: nxnative's default
+    assert main.Native().game_running(game) is False
+    assert asked[-1] == f"org.nxnative.{tid.lower()}"
 
 
 def test_native_notifications_use_the_installed_appkit_api(monkeypatch):
@@ -822,6 +865,72 @@ def built_game(folder, tid, name):
     (contents / "Info.plist").write_bytes(plistlib.dumps({"DMTitleID": tid, "CFBundleDisplayName": name}))
 
 
+def test_out_of_date_goes_by_the_game_files_each_build_started_with(tmp_path, monkeypatch):
+    import os
+
+    import builds
+
+    tid = "0100D9F01D474000"
+    library_folder = tmp_path / "Switch Games"
+    folder = library_folder / "Rhythm Heaven"
+    folder.mkdir(parents=True)
+    base = folder / f"Rhythm Heaven [{tid}].nsp"
+    base.write_bytes(b"b" * 100)
+    os.utime(base, (1_000_000_000, 1_000_000_000))
+    contents = folder / "Rhythm Heaven Groove.app" / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({"DMTitleID": tid, "CFBundleDisplayName": "Rhythm Heaven Groove"}))
+    checkout = tmp_path / "player's nxnative"
+    script = checkout / nxnative.BUILD_SCRIPT
+    script.parent.mkdir(parents=True)
+    script.write_text("# build script\n")
+    monkeypatch.setattr(nxnative.Environment, "ready", lambda self: True)
+    monkeypatch.setattr(nxnative, "build_command", lambda *args, **kwargs: (["true"], folder, {}))
+
+    class BuildNative(FakeNative):
+        def notify(self, title, message):
+            pass
+
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", native=BuildNative(),
+                               dispatch=lambda function, *args: function(*args),
+                               first_launch=lambda: {"library_folder": str(library_folder), "nxnative_checkout": str(checkout)})
+    api = main.Api(app)
+
+    def out_of_date():
+        app._last_scan = None  # rescan: the page does, every 2 s
+        return api.library()["games"][0]["out_of_date"]
+
+    record = tmp_path / "data" / "build-records.json"
+
+    # Built before Switch Player kept records: dates decide, and a record is never made from them.
+    assert out_of_date() is False
+    update = folder / f"Update [{tid[:-3]}800].nsp"  # an update dropped in later, with its old date
+    update.write_bytes(b"u" * 40)
+    os.utime(update, (1_000_000_000, 1_000_000_000))
+    assert out_of_date() is False and not record.exists()  # the dates miss it, as before; it isn't hidden for good
+
+    job = builds.Job(game_id="Rhythm Heaven", path=folder, name="Rhythm Heaven Groove")
+    app._prepare(job)  # a Build starts, and stops or fails: nothing is recorded
+    app._build_finished(job, False)
+    assert out_of_date() is False and not record.exists()
+
+    app._prepare(job)  # a Build starts: these are the files it will use
+    late = folder / f"DLC [{tid[:-3]}001].nsp"
+    late.write_bytes(b"d" * 70)  # dropped in while it builds: it didn't use that one
+    os.utime(late, (1_000_000_000, 1_000_000_000))
+    app._build_finished(job, True)
+    assert record.is_file() and out_of_date() is True  # only the DLC is new to its record
+
+    app._prepare(job)
+    app._build_finished(job, True)
+    assert out_of_date() is False
+
+    gained = folder / f"More [{tid[:-3]}002].nsp"  # now it is caught, old date and all
+    gained.write_bytes(b"m" * 90)
+    os.utime(gained, (1_000_000_000, 1_000_000_000))
+    assert out_of_date() is True
+
+
 def test_nxnative_check_answers_like_the_app_update_check(tmp_path, monkeypatch):
     zelda, rhythm, mario = "01008CF01BAAC000", "0100D9F01D474000", "0100965017338000"
     library_folder = tmp_path / "Switch Games"
@@ -857,6 +966,33 @@ def test_nxnative_check_answers_like_the_app_update_check(tmp_path, monkeypatch)
 
     monkeypatch.setattr(nxnative.Copy, "freshness", fail)
     assert app._nxnative_report() == ("Switch Player couldn't check nxnative", "Couldn't reach GitHub.")
+
+
+def test_an_offline_nxnative_check_says_it_compared_with_what_was_fetched_before(tmp_path, monkeypatch):
+    zelda, rhythm = "01008CF01BAAC000", "0100D9F01D474000"
+    library_folder = tmp_path / "Switch Games"
+    library_folder.mkdir()
+    built_game(library_folder, zelda, "Echoes of Wisdom")
+    built_game(library_folder, rhythm, "Rhythm Heaven Groove")
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=lambda: {"library_folder": str(library_folder)},
+                               native=FakeNative())
+    answers = {zelda: {"out_of_date": False, "newer": 0}, rhythm: {"out_of_date": False, "newer": 0}}
+
+    def offline(self, apps):
+        self.fetch_error = "Could not resolve host: github.com"
+        return answers
+
+    monkeypatch.setattr(nxnative.Copy, "freshness", offline)
+    assert app._nxnative_report() == (
+        "Switch Player couldn't reach GitHub",
+        "Compared with the nxnative it last fetched, your games are up to date. (Could not resolve host: github.com)")
+
+    answers[zelda] = {"out_of_date": True, "newer": 3}
+    title, message = app._nxnative_report()
+    assert title == "nxnative has changes for 1 game"
+    assert message == ("Out of date, consider rebuilding: Echoes of Wisdom. Switch Player couldn't reach GitHub "
+                       "(Could not resolve host: github.com), so this compares with the nxnative it last fetched.")
+    assert app._freshness == answers  # the tiles show it too
 
 
 def test_nxnative_check_menu_alerts_from_the_main_thread(tmp_path, monkeypatch):

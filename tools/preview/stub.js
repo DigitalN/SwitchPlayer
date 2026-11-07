@@ -4,7 +4,10 @@
 // second standing for a minute.
 //
 // Query options, combined with commas: ?s=building,dark
-//   library: (default: as it is now, nothing built yet) building ready failed noart many empty nofolder readme
+//   library: (default: as it is now, nothing built yet) building preparing installing ready failed
+//            noart many empty nofolder readme
+//   setup:   setup-ready (Build Setup with everything ready, where Not Now becomes Done)
+//            install-fails (Install Build Tools can't install)
 //   theme:   dark light
 // Change window.__state while it runs to try anything else; the next poll picks it up.
 // window.__state.calls is every API call the page made. Page errors that the app would log
@@ -21,6 +24,8 @@
     games: app.games.map(fresh),
     art: Object.fromEntries(app.games.map(g => [g.id, g.art_data])),
     queue: [],  // ids waiting, in order
+    setup_ready: false,  // Build Setup finds everything ready
+    install_fails: false,  // Install Build Tools can't install
     calls: [],
   };
   const game = id => state.games.find(g => g.id === id);
@@ -42,6 +47,7 @@
     const g = state.games.find(x => x.state === 'building');
     if (!g || !g.progress) return;  // starting; its first stage comes in a moment
     const p = g.progress;
+    if (p.preparing) return;  // the Engine update and the Python packages install take as long as they take
     p.done += 0.5;
     if (p.done >= p.secs) {
       if (p.k < p.n) startStage(g, p.k + 1);
@@ -61,12 +67,23 @@
   }
   setInterval(tick, 500);
 
+  function preparing(what) {
+    Object.assign(at(0), { state: 'building', progress: { preparing: what } });
+    Object.assign(at(1), { state: 'waiting' }); state.queue = [at(1).id].filter(Boolean);
+    Object.assign(at(2), { state: 'ready', app: true, log: true });
+  }
+
   const scenarios = {
     building: () => {
       Object.assign(at(0), { state: 'building' }); startStage(at(0), 9, 0.42); at(0).progress.done = 0.42 * 8; at(0).progress.eta = 280;
       Object.assign(at(1), { state: 'waiting' }); state.queue = [at(1).id].filter(Boolean);
       Object.assign(at(2), { state: 'ready', app: true, log: true });
     },
+    // A Build still preparing, with what it's doing: progress.preparing, then the script's own stages.
+    preparing: () => preparing('Updating nxnative'),
+    installing: () => preparing('Installing Python packages'),
+    'setup-ready': () => { state.setup_ready = true; },
+    'install-fails': () => { state.install_fails = true; },
     ready: () => {
       state.games.forEach(g => Object.assign(g, { state: 'ready', app: true, log: true }));
       at(0).out_of_date = true;
@@ -135,17 +152,29 @@
       }
     },
     set_build_options: (id, text) => { game(id).options = text; },
-    setup: () => ({
-      ready: false,
-      items: [
-        { id: 'mac', name: 'Apple silicon and macOS', ready: true, detail: '26.6', action: null },
-        { id: 'xcode', name: 'Xcode', ready: true, detail: 'Xcode is selected and its first launch is complete.', action: null },
-        { id: 'metal', name: 'Metal Toolchain', ready: false, detail: 'In Terminal, run: xcodebuild -downloadComponent MetalToolchain', action: null },
-        { id: 'tools', name: 'Build tools', ready: false, detail: 'Homebrew tools are missing.', action: 'install' },
-      ],
-    }),
+    setup: () => {
+      const ok = state.setup_ready;
+      return {
+        ready: ok,
+        items: [
+          { id: 'mac', name: 'Apple silicon and macOS', ready: true, detail: '26.6', action: null },
+          { id: 'xcode', name: 'Xcode', ready: true, detail: 'Xcode is selected and its first launch is complete.', action: null },
+          { id: 'metal', name: 'Metal Toolchain', ready: ok,
+            detail: ok ? 'Apple metal version 4.0' : 'In Terminal, run: xcodebuild -downloadComponent MetalToolchain', action: null },
+          { id: 'dotnet', name: '.NET SDK', ready: ok,
+            detail: ok ? '.NET SDK 10.0.403 is installed.' : 'In Terminal, run: brew install --cask dotnet-sdk (it asks for your password)',
+            action: null },
+          { id: 'tools', name: 'Build tools', ready: ok,
+            detail: ok ? 'xcodegen, zstd and glslang are installed.' : 'Homebrew tools are missing.',
+            action: ok ? null : 'install' },
+        ],
+      };
+    },
     import_nxplay_save: id => { console.log(`Preview: would ask, then import ${game(id).name}'s NX Play save`); return true; },
-    install_tools: () => { console.log('Preview: would install the Brewfile tools'); return true; },
+    install_tools: () => {
+      console.log(`Preview: would install the Brewfile tools${state.install_fails ? ', and fail' : ''}`);
+      return !state.install_fails;
+    },
     log_error: message => console.error('Page error:', message),
   };
 

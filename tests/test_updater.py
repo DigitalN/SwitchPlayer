@@ -101,6 +101,113 @@ def test_automatic_install_waits_for_the_build_queue(monkeypatch):
     assert timer.calls[0][0] == updater.INSTALL_RETRY
 
 
+class MainThreadUpdate:
+    """An Updater with a downloaded update waiting, and the AppKit calls it makes faked."""
+
+    def __init__(self, monkeypatch, busy, idle):
+        class Timer:
+            calls = []
+
+            blocks = []
+
+            def scheduledTimerWithTimeInterval_repeats_block_(self, interval, repeats, block):
+                self.calls.append(interval)
+                self.blocks.append(block)
+                return self
+
+            def invalidate(self):
+                pass
+
+        class Events:
+            @staticmethod
+            def pressedMouseButtons():
+                return 0
+
+        class Source:
+            kCGEventSourceStateCombinedSessionState = 1
+            kCGAnyInputEventType = 2
+
+            @staticmethod
+            def CGEventSourceSecondsSinceLastEventType(state, event_type):
+                return idle
+
+        self.timer, self.installed, self.alerts, self.on_main = Timer(), [], [], []
+        monkeypatch.setitem(sys.modules, "Quartz", Source)
+        monkeypatch.setitem(sys.modules, "AppKit", type("AppKit", (), {"NSEvent": Events}))
+        monkeypatch.setitem(sys.modules, "Foundation", type("Foundation", (), {"NSTimer": self.timer}))
+        monkeypatch.setattr(updater, "_alert", lambda title, message, buttons=(): self.alerts.append((title, message)))
+        monkeypatch.setattr(updater, "_on_main", lambda function, *args: self.on_main.append((function, args)))
+        self.update = updater.Updater(None, "0.1.0", "/unused", lambda: busy, lambda *args: None, lambda: None)
+        self.update.unavailable_reason = None
+        self.update.status, self.update.version = updater.READY, "0.2.0"
+        monkeypatch.setattr(self.update, "_install", lambda: self.installed.append(True))
+
+
+def test_check_for_updates_holds_a_waiting_update_for_the_build_and_says_so(monkeypatch):
+    held = MainThreadUpdate(monkeypatch, busy=True, idle=0)
+
+    held.update._install_if_quiet(True)
+
+    assert held.installed == []
+    assert held.alerts == [("Switch Player 0.2.0 is ready", "It will install once the Build ends.")]
+    assert held.timer.calls == [updater.INSTALL_RETRY]  # the Build's end, then the automatic rules
+
+
+def test_check_for_updates_installs_at_once_when_nothing_is_building(monkeypatch):
+    now = MainThreadUpdate(monkeypatch, busy=False, idle=0)  # they just used the menu: not "quiet"
+
+    now.update._install_if_quiet(True)
+
+    assert now.installed == [True] and now.alerts == []
+
+
+def test_an_update_held_for_a_build_installs_when_the_build_ends_without_waiting_for_a_quiet_mouse(monkeypatch):
+    """The alert says "once the Build ends", so the retries remember the player asked."""
+    busy = [True]
+    held = MainThreadUpdate(monkeypatch, busy=True, idle=0)  # they keep using the Mac
+    held.update._is_busy = lambda: busy[0]
+
+    held.update._install_if_quiet(True)
+    retry = held.timer.blocks[0]
+    retry(None)  # the Build is still running
+    assert held.installed == []
+
+    busy[0] = False
+    retry(None)  # 30 s on, the Build has ended; the player is still typing
+
+    assert held.installed == [True]
+
+
+def test_an_automatic_hold_still_waits_for_a_quiet_mouse_after_the_build(monkeypatch):
+    busy = [True]
+    held = MainThreadUpdate(monkeypatch, busy=True, idle=3)
+    held.update._is_busy = lambda: busy[0]
+
+    held.update._install_if_quiet()
+    busy[0] = False
+    held.timer.blocks[0](None)
+
+    assert held.installed == []  # nobody asked: it waits for ten quiet seconds as well
+
+
+def test_an_automatic_install_still_waits_for_a_quiet_keyboard_and_mouse(monkeypatch):
+    typing = MainThreadUpdate(monkeypatch, busy=False, idle=2)
+
+    typing.update._install_if_quiet()
+
+    assert typing.installed == [] and typing.alerts == []
+    assert typing.timer.calls == [updater.INSTALL_RETRY]
+
+
+def test_the_menu_sends_a_waiting_update_to_the_main_thread_not_straight_to_install(monkeypatch):
+    waiting = MainThreadUpdate(monkeypatch, busy=True, idle=60)
+
+    waiting.update.check_now()  # runs on pywebview's menu thread
+
+    assert waiting.installed == [] and waiting.alerts == []
+    assert waiting.on_main == [(waiting.update._install_if_quiet, (True,))]
+
+
 def test_relaunch_keeps_test_data_and_feed_isolated(tmp_path, monkeypatch):
     import launch
     calls = []

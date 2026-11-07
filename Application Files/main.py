@@ -14,6 +14,7 @@ import library
 import migration
 import nxnative
 import prerequisites
+import records
 import settings
 import titledb
 import updater
@@ -51,7 +52,8 @@ class Native:
         if not game.app:
             return False
         from AppKit import NSRunningApplication
-        bundle_id = f"org.nxnative.{game.title_id.lower()}"
+        # Its own CFBundleIdentifier: nxnative's default only unless the app was packed with another.
+        bundle_id = game.app.bundle_id or f"org.nxnative.{game.title_id.lower()}"
         return bool(NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle_id))
 
     def confirm(self, message, action="Quit", detail=""):
@@ -142,6 +144,8 @@ class SwitchPlayerApp:
         self._save_root = Path(save_root) if save_root is not None else self._default_save_root()
         self._game_running = game_running or self._native.game_running
         self._settings = settings.Settings(self._data_dir / "settings.json", first_launch=first_launch)
+        self._records = records.Records(self._data_dir / "build-records.json")
+        self._build_files = {}  # game id → its game files when its running Build started
         self._titledb = titledb.TitleDB(self._data_dir / "titledb")
         self._builder = builder
         self._games = {}
@@ -155,6 +159,7 @@ class SwitchPlayerApp:
         self._freshness_fetch_lock = threading.Lock()
         self._freshness_thread = None
         self._freshness_checked = None
+        self._freshness_offline = None  # why the last check couldn't fetch nxnative, when it couldn't
         self._window = None
         self._caffeinate = None
         self._updater = updater.Updater(launch.bundle_path(), VERSION, self._data_dir,
@@ -162,7 +167,7 @@ class SwitchPlayerApp:
                                         on_status=self._update_status, quit_app=self._quit_for_update)
 
     def _update_status(self, status, version):
-        log.info("Update status: %s%s", status, f" {version}" if version else "")
+        log.info("App update status: %s%s", status, f" {version}" if version else "")
 
     def _quit_for_update(self):
         import AppKit
@@ -185,6 +190,9 @@ class SwitchPlayerApp:
 
     def _build_finished(self, job, ok):
         self._last_scan = None
+        files = self._build_files.pop(job.game_id, None)
+        if ok and files is not None:
+            self._records.set_files(job.game_id, files)  # what this Build used: Out of date goes by it
         if ok:
             game = self._games.get(job.game_id)
             with self._freshness_lock:
@@ -290,13 +298,18 @@ class SwitchPlayerApp:
         webview.start(private_mode=True, debug=False, menu=menus)
 
     def _prepare(self, job):
+        game = self._games.get(job.game_id)
+        try:
+            self._build_files[job.game_id] = nxnative.game_files(game) if game else None
+        except OSError:
+            self._build_files[job.game_id] = None
         values = self._settings.get()
         copy = nxnative.Copy(values["nxnative_checkout"] or self._data_dir / "nxnative",
                              own=values["nxnative_checkout"] is None)
         environment = nxnative.Environment(self._data_dir / "nxnative-python",
                                            Path(__file__).parent / "nxnative-python" / "pyproject.toml")
         job.progress = {"preparing": "Updating nxnative"}
-        copy.update()
+        copy.update(say=job.say)
         if not environment.ready():
             job.progress = {"preparing": "Installing Python packages"}
         environment.ensure()
@@ -342,13 +355,20 @@ class SwitchPlayerApp:
                 "app": bool(game.app),
                 "progress": status["progress"] if status else None,
                 "error": status["error"] if status else None,
-                "out_of_date": current.get("out_of_date", False) or nxnative.game_files_changed(game),
+                "out_of_date": current.get("out_of_date", False) or self._files_changed(game),
                 "newer": current.get("newer", 0),
                 "log": self._game_log(game).exists(),
                 "nxplay_save": game.nxplay_save,
                 "options": values["build_options"].get(game.id, ""),
             })
         return {"folder_name": Path(folder).name, "games": result}
+
+    def _files_changed(self, game):
+        """Whether the Game folder gained files since the Game app's Build: by the record that
+        Build wrote (records.py), or, for a Game app built before there were records, by the files'
+        modification dates until its next Build writes one. Never a record made from those dates:
+        it would take a file copied in with an old date for one the Build had used."""
+        return nxnative.game_files_changed(game, self._records.files(game.id))
 
     def _refresh_freshness(self, force=False):
         with self._freshness_lock:
@@ -375,6 +395,7 @@ class SwitchPlayerApp:
             freshness = copy.freshness(apps)
         with self._freshness_lock:
             self._freshness = freshness
+            self._freshness_offline = copy.fetch_error
             self._freshness_checked = time.time()
         return freshness
 
@@ -395,11 +416,17 @@ class SwitchPlayerApp:
         out_of_date, newer = [], []
         for game in built:
             current = freshness.get(game.title_id, {})
-            if current.get("out_of_date") or nxnative.game_files_changed(game):
+            if current.get("out_of_date") or self._files_changed(game):
                 out_of_date.append(self._game_name(game))
             elif current.get("newer"):
                 newer.append(f"{self._game_name(game)} ({current['newer']:,})")
+        with self._freshness_lock:
+            offline = self._freshness_offline
+        # Offline, the answer is only as new as the last fetch, and says so.
+        stale = f"Switch Player couldn't reach GitHub ({offline}), so this compares with the nxnative it last fetched."
         if not out_of_date and not newer:
+            if offline:
+                return "Switch Player couldn't reach GitHub", f"Compared with the nxnative it last fetched, your games are up to date. ({offline})"
             return "Your games are up to date with nxnative", "Your next Build will use the latest nxnative."
         count = len(out_of_date) + len(newer)
         parts = []
@@ -407,6 +434,8 @@ class SwitchPlayerApp:
             parts.append(f"Out of date, consider rebuilding: {', '.join(out_of_date)}.")
         if newer:
             parts.append(f"Newer changes that don't need a rebuild: {', '.join(newer)}.")
+        if offline:
+            parts.append(stale)
         return f"nxnative has changes for {count} game{'' if count == 1 else 's'}", " ".join(parts)
 
     def _game_name(self, game):
@@ -559,7 +588,9 @@ class Api:
         return self._app._art(game_id)
 
     def choose_library(self):
-        self._app._dispatch(self._app.choose_library)
+        # On this call's own thread, as the menu's action runs: pywebview queues its folder panel
+        # onto the main thread and waits for it, so asking the main thread to do it freezes the app.
+        self._app.choose_library()
 
     def play(self, game_id):
         self._app._play(game_id)

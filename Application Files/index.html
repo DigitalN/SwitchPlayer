@@ -507,10 +507,10 @@ $('options-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e
 
 // ── first-launch setup ──────────────────────────────────
 let setupSeen = false, setupBusy = false;
-async function showSetup() {
+async function showSetup(options = {}) {  // options.keepError: a failed install's message stays up
   if (setupBusy) return;
   setupBusy = true;
-  $('setup-error').hidden = true;
+  if (!options.keepError) $('setup-error').hidden = true;
   $('setup-recheck').disabled = true;
   try {
     const result = await api().setup();
@@ -540,7 +540,7 @@ $('setup-install').addEventListener('click', async () => {
     $('setup-error').textContent = 'Homebrew could not install the tools. See the app log, then try again.';
     $('setup-error').hidden = false;
   }
-  showSetup();
+  showSetup({ keepError: !ok });
 });
 
 // ── boot ────────────────────────────────────────────────

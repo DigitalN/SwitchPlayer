@@ -88,6 +88,32 @@ def test_own_copy_clones_updates_and_follows_a_force_push(tmp_path, upstream):
     assert copy.script.read_text() == "print('first')\n"
 
 
+def test_an_unreachable_upstream_builds_with_the_complete_copy_as_it_is(tmp_path, upstream):
+    first = git(upstream.work, "rev-parse", "HEAD")
+    copy = nxnative.Copy(tmp_path / "data" / "nxnative", own=True, upstream=str(upstream.bare))
+    copy.update()
+    upstream.commit("print('second')\n")
+    upstream.push()
+    upstream.bare.rename(tmp_path / "offline.git")  # GitHub can't be reached
+    said = []
+
+    assert copy.update(say=said.append) == short(upstream.work, first)
+
+    assert copy.script.read_text() == "print('first')\n"
+    assert len(said) == 1 and "Building with Switch Player's copy as it is" in said[0]
+    assert short(upstream.work, first) in said[0]
+
+
+def test_an_unreachable_upstream_still_fails_when_there_is_no_copy_yet(tmp_path, upstream):
+    copy = nxnative.Copy(tmp_path / "data" / "nxnative", own=True, upstream=str(tmp_path / "nowhere.git"))
+    said = []
+
+    with pytest.raises(nxnative.NxnativeError):
+        copy.update(say=said.append)
+
+    assert not copy.ready() and said == []
+
+
 def test_a_players_checkout_is_never_changed(tmp_path, upstream):
     first = short(upstream.work)
     player = tmp_path / "player"

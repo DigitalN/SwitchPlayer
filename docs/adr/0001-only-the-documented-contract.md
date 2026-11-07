@@ -4,7 +4,7 @@ Switch Player's first priority is that nxnative stays the easiest thing to updat
 
 So Switch Player uses only what nxnative documents for front ends (`docs/frontends.md`): the build script's command line, its `--progress json` events and exit codes, and each Game app's `Info.plist`, `launcher.json` and saved choices. Anything more it needs goes to nxnative as a pull request, never as a workaround here. Every nxnative internal Switch Player relied on would bring back the wait for an Switch Player release, as it did for NX Play.
 
-One exception, and only while that pull request is open: Switch Player may read an undocumented nxnative detail where a failure could only change what Switch Player shows, never a Build or Play.
+One exception, and only until that pull request is merged, whether or not it has been opened yet: Switch Player may read an undocumented nxnative detail where a failure could only change what Switch Player shows, never a Build or Play. (Amended 2026-11-07: this said "only while that pull request is open", which nothing met while the pull request was still to be written.)
 
 ## Considered options
 
@@ -20,4 +20,4 @@ One exception, and only while that pull request is open: Switch Player may read 
   - **A switch that shows a Game app's Settings window** even when the player turned it off. Until then, **Settings…** needs that window left on.
   - **The build script's options in a form a program can read.** Until then, **Build Options…** is a text field passed to the script as typed.
   - **nxnative's dependencies as files** (Python version, Python packages, Homebrew packages), which Switch Player installs from after every Engine update. Until then, Switch Player uses NX Play's list.
-  - **Documenting what tells a front end a Game app is Out of date**: the commit a Game app records, the folder holding each game's own files, and the shader version. Until then, Switch Player reads them under the exception above, and shows only a count of newer changes if any of them is missing.
+  - **Documenting what tells a front end a Game app is Out of date**: the commit a Game app records, the folder holding each game's own files, the shader version, and the folders nxnative writes beside a game. Until then, Switch Player reads them under the exception above, and shows only a count of newer changes if any of them is missing.
