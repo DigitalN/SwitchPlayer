@@ -4,8 +4,10 @@ reaction to SIGINT, driven by the Game folder it's given.
     fake_build.py <Game folder> --platform mac-app --progress json [-k keys] [options]
 
 The Game folder's `plan.json` says what to do: {"stages": [[name, seconds], …], "exit": 0,
-"red": "…", "usage": true, "stderr": "…"}. A finished Build writes `<name>.app` with an
-Info.plist into the folder, as the real script does.
+"red": "…", "usage": true, "stderr": "…", "game": {title_id, name, icon, …}}. With "game", the
+`game` event and the `say` after it come once the first stage ends, as the real script sends
+them after unpacking. A finished Build writes `<name>.app` with an Info.plist into the folder,
+as the real script does.
 """
 
 import json
@@ -37,6 +39,10 @@ def main():
             emit(ev="progress", k=k, name=name, step="working", done=i + 1, total=steps, unit="", est=False, note="",
                  frac=min(0.99, (i + 1) / steps), eta=secs * (steps - i - 1) / steps, elapsed=secs * (i + 1) / steps)
         emit(ev="stage_end", k=k, name=name, ok=True, summary="", elapsed=secs)
+        if k == 1 and plan.get("game"):
+            g = {"version": "1.0", "bundle_id": "org.nxnative.x", "out": str(folder / "x.app"), "icon": None, **plan["game"]}
+            emit(ev="game", **g)
+            emit(ev="say", msg=f"app name: {g['name']}; version: {g['version']}; bundle ID: {g['bundle_id']}; app: {g['out']}")
     if plan.get("stderr"):
         print(plan["stderr"], file=sys.stderr, flush=True)
     if plan.get("red"):

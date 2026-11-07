@@ -1280,3 +1280,166 @@ def test_a_new_versions_first_launch_shows_the_bundles_icon_and_refreshes_the_ca
     native.calls.clear()
     app._refresh_icon_if_updated(app_path)  # the next launch of the same version
     assert native.calls == []
+
+
+OCARINA = "0400486024DEC000"
+FAKE_BUILD = Path(__file__).resolve().parent / "fake_build.py"
+
+
+class OcarinaNative(FakeNative):
+    def notify(self, title, message):
+        self.calls.append(("notify", title, message))
+
+    def convert_icon(self, source, output):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"\xff\xd8\xff" + source.read_bytes())
+
+    def prevent_sleep(self):
+        return "held"
+
+    def allow_sleep(self, token):
+        pass
+
+
+def ocarina(tmp_path):
+    """Ocarina of Time during its first Build: titledb has no entry for it, and the Build has just
+    unpacked the game's own icon into its build folder."""
+    folder = tmp_path / "Switch Games" / "Ocarina of Time"
+    icon = folder / f"{OCARINA}_build" / "extract" / "v131072" / "icon.jpg"
+    icon.parent.mkdir(parents=True)
+    icon.write_bytes(b"\xff\xd8\xffown icon")
+    (folder / "Ocarina of Time.nup").touch()
+    return folder, icon
+
+
+def ocarina_app(tmp_path, folder, native=None, builder=None):
+    return main.SwitchPlayerApp(data_dir=tmp_path / "data", save_root=tmp_path / "saves",
+                                first_launch=lambda: {"library_folder": str(folder.parent)},
+                                builder=builder or FakeBuilder(), native=native or OcarinaNative(),
+                                dispatch=lambda function, *args: function(*args))
+
+
+def game_event(icon_path, **changes):
+    return {"ev": "game", "title_id": OCARINA, "name": "The Legend of Zelda: Ocarina of Time", "version": "1.0",
+            "bundle_id": "org.nxnative.0400486024dec000", "out": "/x/The Legend of Zelda - Ocarina of Time.app",
+            "icon": str(icon_path), "t": 1.0, **changes}
+
+
+def jpeg(data):
+    return "data:image/jpeg;base64," + base64.b64encode(data).decode()
+
+
+def test_a_builds_game_event_names_the_game_and_gives_its_icon_before_it_finishes(tmp_path):
+    """Issue #42: titledb doesn't list Ocarina of Time, so its tile kept its Game folder's name and
+    a plain tile through a whole Build, though nxnative names it about a minute in."""
+    folder, icon = ocarina(tmp_path)
+    native = OcarinaNative()
+    app = ocarina_app(tmp_path, folder, native)
+    api = main.Api(app)
+    before = api.library()["games"][0]
+    assert (before["name"], before["art"]) == ("Ocarina of Time", None)
+
+    job = builds.Job(game_id="Ocarina of Time", path=folder, name="Ocarina of Time")
+    app._build_named(job, game_event(icon))
+    icon.unlink()  # an IPA build clears the extraction it was in: the copy stays
+    game = api.library()["games"][0]
+    assert game["name"] == "The Legend of Zelda: Ocarina of Time"
+    assert game["art"] is not None
+    assert api.art("Ocarina of Time") == jpeg(b"\xff\xd8\xffown icon")
+
+    # Kept when that Build fails, which the notification says by the game's own name, and after a relaunch.
+    job.state = "failed"
+    app._build_finished(job, False)
+    assert native.calls[-1] == ("notify", "The Legend of Zelda: Ocarina of Time", "Build failed")
+    again = main.Api(ocarina_app(tmp_path, folder))
+    game = again.library()["games"][0]
+    assert game["name"] == "The Legend of Zelda: Ocarina of Time"
+    assert again.art("Ocarina of Time") == jpeg(b"\xff\xd8\xffown icon")
+
+
+def test_eshop_art_and_an_existing_game_app_come_before_the_game_event(tmp_path):
+    folder, icon = ocarina(tmp_path)
+    data = tmp_path / "data"
+    (data / "titledb" / "art").mkdir(parents=True)
+    (data / "titledb" / "index.json").write_text(json.dumps({
+        "fetched": 0, "titles": {OCARINA: {"name": "Ocarina of Time eShop", "icon": None}}, "missing": []}))
+    (data / "titledb" / "art" / f"{OCARINA}.jpg").write_bytes(b"\xff\xd8\xffeshop")
+    app = ocarina_app(tmp_path, folder)
+    api = main.Api(app)
+    app._build_named(builds.Job(game_id="Ocarina of Time", path=folder, name="Ocarina of Time"), game_event(icon))
+
+    game = api.library()["games"][0]
+    assert game["name"] == "The Legend of Zelda: Ocarina of Time"  # the name its Game app will carry, over the eShop's
+    assert api.art("Ocarina of Time") == jpeg(b"\xff\xd8\xffeshop")  # 1024×1024, over the game's own 256×256
+
+    # A Game app already there (a Rebuild's) speaks for itself until the Build replaces it.
+    (data / "titledb" / "art" / f"{OCARINA}.jpg").unlink()
+    resources = folder / "Zelda.app" / "Contents" / "Resources"
+    resources.mkdir(parents=True)
+    (resources / "AppIcon.icns").write_bytes(b"app icon")
+    (resources.parent / "Info.plist").write_bytes(plistlib.dumps({"DMTitleID": OCARINA, "CFBundleDisplayName": "Zelda"}))
+    app._last_scan = None
+    game = api.library()["games"][0]
+    assert game["name"] == "Zelda"
+    assert api.art("Ocarina of Time") == jpeg(b"\xff\xd8\xffapp icon")
+
+
+def test_a_game_event_without_an_icon_or_a_name_or_for_another_title(tmp_path):
+    folder, icon = ocarina(tmp_path)
+    app = ocarina_app(tmp_path, folder)
+    api = main.Api(app)
+    job = builds.Job(game_id="Ocarina of Time", path=folder, name="Ocarina of Time")
+    kept = tmp_path / "data" / "Icons" / "Builds" / "Ocarina of Time.jpg"
+    app._build_named(job, game_event(icon))
+    assert kept.is_file()
+
+    app._build_named(job, game_event(icon, icon=None))  # a later Build's: the game has no icon now
+    assert not kept.exists()
+    game = api.library()["games"][0]
+    assert (game["name"], game["art"]) == ("The Legend of Zelda: Ocarina of Time", None)  # a plain tile with its name
+
+    app._build_named(job, game_event(icon, title_id="zelda"))
+    app._build_named(job, game_event(icon, name=None))
+    app._build_named(job, game_event(icon, name="  "))
+    assert app._records.game("Ocarina of Time")["name"] == "The Legend of Zelda: Ocarina of Time"
+
+    # The Game folder has come to hold another title: what the event said was about the last one.
+    (folder / f"{OCARINA}_build").rename(folder / "0100D9F01D474000_build")
+    app._last_scan = None
+    assert api.library()["games"][0]["name"] == "Ocarina of Time"
+
+
+def test_the_tile_takes_the_game_events_name_while_its_build_runs(tmp_path, monkeypatch):
+    """Through the real Builder, with the stand-in build script: the name shows mid-Build, and the
+    Build finished notification uses it."""
+    folder, icon = ocarina(tmp_path)
+    (folder / "plan.json").write_text(json.dumps({
+        "stages": [["unpack v131072", 0.05], ["Mac shaders", 1.5]], "title_id": OCARINA,
+        "name": "The Legend of Zelda: Ocarina of Time",
+        "game": {"title_id": OCARINA, "name": "The Legend of Zelda: Ocarina of Time", "icon": str(icon)}}))
+    monkeypatch.setattr(nxnative.Copy, "update", lambda self, **kwargs: "fedcba987654")
+    monkeypatch.setattr(nxnative.Copy, "build_commit", lambda self: "fedcba987654")
+    monkeypatch.setattr(nxnative.Environment, "ready", lambda self: True)
+    monkeypatch.setattr(nxnative.Environment, "ensure", lambda self, **kwargs: None)
+    monkeypatch.setattr(nxnative, "build_command", lambda copy, environment, path, **kwargs: (
+        [sys.executable, str(FAKE_BUILD), str(path), "--platform", "mac-app", "--progress", "json"], path, None))
+    native = OcarinaNative()
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", save_root=tmp_path / "saves", native=native,
+                               first_launch=lambda: {"library_folder": str(folder.parent)},
+                               dispatch=lambda function, *args: function(*args))
+    api = main.Api(app)
+    assert api.library()["games"][0]["name"] == "Ocarina of Time"
+
+    api.build("Ocarina of Time")
+    end = time.time() + 10
+    while time.time() < end and api.library()["games"][0]["name"] == "Ocarina of Time":
+        time.sleep(0.05)
+    game = api.library()["games"][0]
+    assert game["name"] == "The Legend of Zelda: Ocarina of Time" and game["state"] == "building"
+    assert api.art("Ocarina of Time") == jpeg(b"\xff\xd8\xffown icon")
+
+    end = time.time() + 10
+    while time.time() < end and ("notify", "The Legend of Zelda: Ocarina of Time", "Build finished") not in native.calls:
+        time.sleep(0.05)
+    assert ("notify", "The Legend of Zelda: Ocarina of Time", "Build finished") in native.calls
+    app._builder.stop_all(grace=5)
