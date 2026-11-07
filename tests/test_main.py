@@ -191,6 +191,10 @@ class FakeNative:
     def open_in_console(self, path):
         self.calls.append(("console", Path(path)))
 
+    def copy_text(self, text):
+        self.calls.append(("copy", text))
+        return self.answer
+
 
 def test_play_settings_finder_and_logs_use_the_native_adapter(tmp_path):
     tid = "0100D9F01D474000"
@@ -1130,6 +1134,27 @@ def test_the_build_log_pane_reads_the_log_in_whole_lines(tmp_path):
     builder.log.write_text("Build of Ocarina of Time, again\n")
     again = api.build_log("Ocarina of Time", second["offset"], second["key"])
     assert again["key"] != second["key"] and again["text"] == "Build of Ocarina of Time, again\n"
+
+
+def test_copy_log_copies_the_whole_file_as_written(tmp_path, monkeypatch):
+    builder = FakeBuilder()
+    builder.log = None
+    app = pane_app(tmp_path, builder)
+    api = main.Api(app)
+    api.library()
+    assert api.copy_build_log("Ocarina of Time") is False  # no Build yet: nothing to copy
+    assert app._native.calls == []
+
+    builder.log = tmp_path / "Ocarina of Time.log"
+    text = "Build of Ocarina of Time\n" + "   translating\n" * 20000 + "[RED] less than 31 GB free\n   Receiving obj"
+    builder.log.write_text(text)
+    assert api.copy_build_log("Ocarina of Time") is True
+    assert app._native.calls == [("copy", text)]  # all of it, markers and a half-written line included
+
+    app._native.answer = False  # the clipboard refused it
+    assert api.copy_build_log("Ocarina of Time") is False
+    builder.log.unlink()  # gone between the tile's poll and the click
+    assert api.copy_build_log("Ocarina of Time") is False
 
 
 def test_a_long_build_log_starts_at_its_last_lines(tmp_path, monkeypatch):

@@ -53,6 +53,14 @@ class Native:
     def open_in_console(self, path):
         subprocess.run(["/usr/bin/open", "-a", "Console", str(path)], check=True)
 
+    def copy_text(self, text):
+        """Put plain text on the clipboard (the page's own clipboard calls aren't reliable in the
+        app's web view). On the main thread."""
+        from AppKit import NSPasteboard, NSPasteboardTypeString
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        return bool(pasteboard.setString_forType_(text, NSPasteboardTypeString))
+
     def game_running(self, game):
         if not game.app:
             return False
@@ -587,6 +595,22 @@ class SwitchPlayerApp:
         if path:
             self._dispatch(self._native.open_in_console, path)
 
+    def _copy_build_log(self, game_id):
+        """Copy Log: the game's whole Build log, as the file holds it (the pane shows at most its
+        last lines, without nxnative's [RED] markers). True once it's on the clipboard."""
+        path = self._build_log_file(game_id)
+        if not path:
+            return False
+        try:
+            text = path.read_bytes().decode("utf-8", "replace")
+        except OSError as e:
+            log.warning("Couldn't copy the Build log of %s: %s", game_id, e)
+            return False
+        if not self._native_dialog(self._native.copy_text, text):
+            log.warning("Couldn't copy the Build log of %s: the clipboard refused it", game_id)
+            return False
+        return True
+
     def _ui_state(self):
         pane = self._settings.get()["build_log_pane"]
         return {"log_open": pane["open"], "log_width": pane["width"], "log_game": pane["game"]}
@@ -709,6 +733,9 @@ class Api:
 
     def open_build_log(self, game_id):
         self._app._open_build_log(game_id)
+
+    def copy_build_log(self, game_id):
+        return self._app._copy_build_log(game_id)
 
     def ui_state(self):
         return self._app._ui_state()

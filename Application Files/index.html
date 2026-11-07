@@ -169,6 +169,11 @@ main { flex: 1; min-width: 0; height: 100%; overflow-y: auto; padding: 0 24px 32
   background: var(--card); border-left: 1px solid var(--line-strong);
 }
 .pane .close { display: none; width: 26px; padding: 0; justify-content: center; font-size: 15px; }
+/* In a narrow pane, Copy Log and Open in Console say just Copy and Console, so the game's name
+   keeps some room. */
+.pane { container-type: inline-size; }
+.tool .narrow { display: none; }
+@container (max-width: 359px) { .tool .wide { display: none; } .tool .narrow { display: inline; } }
 /* Too narrow for the grid and the pane side by side: the pane covers the grid's right side. */
 @media (max-width: 799px) {
   .pane {
@@ -179,7 +184,7 @@ main { flex: 1; min-width: 0; height: 100%; overflow-y: auto; padding: 0 24px 32
 }
 .pane-head { flex: none; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); }
 .pane-title { flex: 1; min-width: 0; line-height: 1.25; }
-.pane-title small { display: block; font-size: 11px; color: var(--muted); }
+.pane-title small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: var(--muted); }
 .pane-title b { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; }
 .log {
   flex: 1; min-height: 0; overflow: auto; padding: 6px 0 12px;
@@ -308,7 +313,8 @@ dialog input:focus { outline: 3px solid color-mix(in srgb, var(--accent) 45%, tr
   <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Build Log width"></div>
   <div class="pane-head">
     <div class="pane-title"><small>Build Log</small><b id="log-game"></b></div>
-    <button class="tool" id="log-console" disabled>Open in Console</button>
+    <button class="tool" id="log-copy" disabled><span class="wide">Copy Log</span><span class="narrow">Copy</span></button>
+    <button class="tool" id="log-console" disabled><span class="wide">Open in Console</span><span class="narrow">Console</span></button>
     <button class="tool close" id="log-close" aria-label="Hide the Build Log" title="Hide the Build Log">✕</button>
   </div>
   <div class="log" id="log" role="log" tabindex="0"></div>
@@ -750,6 +756,36 @@ $('log-toggle').addEventListener('click', () => {
 $('log-close').addEventListener('click', () => { ui.log_open = false; applyUi(); saveUi(); });
 $('log-console').addEventListener('click', () => { if (ui.log_game) call('open_build_log', ui.log_game); });
 
+// Copy Log: the whole file, through the app (copy_build_log), which says whether it worked;
+// the button says so for a moment.
+let copyTimer = null;
+const COPY_LABEL = $('log-copy').innerHTML;
+$('log-copy').addEventListener('click', async () => {
+  if (!ui.log_game) return;
+  const button = $('log-copy');
+  let ok = false;
+  try { ok = await api().copy_build_log(ui.log_game); } catch (e) { reportError(`copy_build_log: ${e.message || e}`); }
+  button.innerHTML = ok ? 'Copied' : "Couldn't Copy";
+  clearTimeout(copyTimer);
+  copyTimer = setTimeout(() => { button.innerHTML = COPY_LABEL; }, 2000);
+});
+
+// Cmd+A selects the log's lines when the log has focus (clicking in it gives it focus), and
+// nothing anywhere else: the rest of the page isn't text to select, and a failed tile's error,
+// which stays selectable for its own Copy, was coming along with the log. Text fields keep theirs.
+document.addEventListener('keydown', e => {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'a') return;
+  if (e.target.closest?.('input, textarea, [contenteditable]')) return;
+  e.preventDefault();
+  const selection = getSelection();
+  selection.removeAllRanges();
+  if (logEl.contains(document.activeElement) && !logEl.hidden) {
+    const range = document.createRange();
+    range.selectNodeContents(logEl);
+    selection.addRange(range);
+  }
+});
+
 // The line under the log: what the Build is doing right now, as the tile says it, with the
 // stage's count. Never written to the log file.
 function liveLine(g) {
@@ -775,6 +811,7 @@ function renderPane(games) {
   put($('pane-empty'), 'hidden', has);
   put(logEl, 'hidden', !has);
   $('log-console').disabled = !has;
+  $('log-copy').disabled = !has;
   const live = has && (g.state === 'building' || g.state === 'waiting');
   put($('live'), 'hidden', !live);
   if (live) put($('live-text'), 'text', liveLine(g));

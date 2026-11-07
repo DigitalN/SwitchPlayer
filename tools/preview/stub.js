@@ -16,6 +16,7 @@
 //            update-failed (Check for Updates… couldn't: stays until closed) update-failed-auto (fades)
 //            update-run (a whole automatic update, from Checking to Updated) update-none (Checking, then Up to date!)
 //   pane:    closed (the Build Log pane hidden, as a player may leave it)
+//            copy-fails (Copy Log can't put the log on the clipboard)
 //   theme:   dark light
 // Change window.__state while it runs to try anything else; the next poll picks it up.
 // window.__state.calls is every API call the page made. Page errors that the app would log
@@ -35,6 +36,7 @@
     setup_ready: true,  // Build Setup finds everything ready, as on the maintainer's Mac
     update: null,  // the App update toast (updater.Updater.toast), or null
     install_fails: false,  // Install Build Tools can't install
+    copy_fails: false,  // Copy Log can't copy
     calls: [],
     logs: {},  // game id → { key, lines }: each game's last Build log
     ui: { log_open: true, log_width: 380, log_game: null },
@@ -195,6 +197,7 @@
       Object.assign(named('Rhythm'), { state: 'ready', app: true, log: true, build_log: true });
     },
     closed: () => { state.ui.log_open = false; },
+    'copy-fails': () => { state.copy_fails = true; },
     building: () => {
       Object.assign(at(0), { state: 'building' }); newLog(at(0)); startStage(at(0), 9, 0.42); at(0).progress.at = 0.42 * 8; at(0).progress.eta = 280;
       Object.assign(at(1), { state: 'waiting' }); state.queue = [at(1).id].filter(Boolean);
@@ -303,6 +306,12 @@
       return { key: log.key, offset: log.lines.length, text: log.lines.slice(from).map(l => `${l}\n`).join('') };
     },
     open_build_log: id => console.log(`Preview: would open ${game(id).name}'s Build log in Console`),
+    copy_build_log: id => {
+      const log = state.logs[id];
+      if (!log || state.copy_fails) return false;
+      console.log(`Preview: would copy ${game(id).name}'s whole Build log (${log.lines.length} lines) to the clipboard`);
+      return true;
+    },
     ui_state: () => ({ ...state.ui }),
     set_ui_state: values => { Object.assign(state.ui, values); },
     art: id => state.art[id] || null,
