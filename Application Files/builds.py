@@ -6,8 +6,13 @@ the script then exits with 130. Its steps write `.partial` folders, renamed when
 Game app is written as `<app>.partial`, so the last Game app stays playable and the next Build
 reuses the steps that finished.
 
-Each Build's own log (the events for people, and stderr) is kept in the log folder for Show
-Build Log; the previous one beside it. The tools' full output is in the build folder's logs/.
+Before the build script, `prepare(job)` gets the Build ready (the Engine update, the Python
+environment). What its tools print goes into the Build log through job.say(), and each tool
+it starts is given to job.track(), so Stop interrupts preparation as it does the script.
+
+Each Build's own log (preparation's output, the events for people, and stderr) is kept in the
+log folder for the Build Log pane; the previous one beside it. The tools' full output is in the
+build folder's logs/.
 """
 
 import json
@@ -26,6 +31,7 @@ from nxnative import NxnativeError
 log = logging.getLogger("switchplayer")
 
 STOP_GRACE = 20  # seconds a Build gets to stop by itself at Quit before it's ended
+COUNTS = ("frac", "eta", "done", "total", "unit")  # what a stage's progress events count
 
 
 @dataclass
@@ -42,10 +48,16 @@ class Job:
     red: str | None = None  # the last [RED] message
     stderr_tail: list = field(default_factory=list)
     say: object = field(default=lambda text: None, repr=False)  # a line for the Build log, while preparing
+    track: object = field(default=lambda process: None, repr=False)  # a tool preparation started
 
 
 def safe_name(name):
     return re.sub(r"[^\w .-]+", "_", name).strip() or "game"
+
+
+def log_path(log_dir, game_id):
+    """Where a game's Build log is kept, whether or not it has one yet."""
+    return Path(log_dir) / f"{safe_name(game_id)}.log"
 
 
 class Builder:
@@ -74,7 +86,10 @@ class Builder:
             job = self._jobs.get(game_id)
             if not job:
                 return None
-            return {"state": job.state, "progress": dict(job.progress) if job.progress else None,
+            progress = dict(job.progress) if job.progress else None
+            if progress and "since" in progress:  # preparing: how long this step has taken
+                progress["elapsed"] = max(0, int(time.monotonic() - progress.pop("since")))
+            return {"state": job.state, "progress": progress,
                     "error": job.error, "log": str(job.log_path) if job.log_path else None}
 
     def build_log(self, game_id):
@@ -151,6 +166,13 @@ class Builder:
         if job.process and job.process.poll() is None:
             self._signal(job, signal.SIGINT)
 
+    def _track(self, job, process):
+        """A tool preparation started: Stop interrupts it, and one started after Stop at once."""
+        with self._lock:
+            job.process = process
+            if job.stop_requested:
+                self._interrupt(job)
+
     @staticmethod
     def _signal(job, sig):
         try:
@@ -181,7 +203,7 @@ class Builder:
                 self._busy_changed()
 
     def _log_path(self, game_id):
-        return self._log_dir / f"{safe_name(game_id)}.log"
+        return log_path(self._log_dir, game_id)
 
     def _build(self, job):
         self._log_dir.mkdir(parents=True, exist_ok=True)
@@ -189,18 +211,32 @@ class Builder:
         if job.log_path.exists():
             os.replace(job.log_path, job.log_path.with_suffix(".prev.log"))
         with open(job.log_path, "w", encoding="utf-8") as out:
-            out.write(f"Build of {job.name} ({job.path}), {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            out.flush()
-            job.say = lambda text: (out.write(text + "\n"), out.flush())
+            write = threading.Lock()
+
+            def say(text):
+                with write:
+                    out.write(text + "\n")
+                    out.flush()
+
+            say(f"Build of {job.name} ({job.path}), {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            job.say, job.track = say, lambda process: self._track(job, process)
             try:
-                argv, cwd, env = self._prepare(job)
+                command = self._prepare(job)
             except NxnativeError as e:
-                out.write(f"\n{e}\n")
+                if job.stop_requested:  # what Stop interrupted fails, as it should
+                    say("\nStopped")
+                    return self._finish(job, "stopped")
+                say(f"\n{e}")
                 return self._finish(job, "failed", str(e))
+            finally:
+                job.say, job.track = Job.say, Job.track
+                with self._lock:
+                    job.process = None
             if job.stop_requested:
+                say("\nStopped")
                 return self._finish(job, "stopped")
-            out.write(f"$ {' '.join(argv)}\n  in {cwd}\n\n")
-            out.flush()
+            argv, cwd, env = command
+            say(f"\n$ {' '.join(argv)}\n  in {cwd}\n")
             try:
                 process = subprocess.Popen(
                     argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -212,7 +248,6 @@ class Builder:
                 job.process = process
                 if job.stop_requested:  # Stop came while it started
                     self._interrupt(job)
-            write = threading.Lock()
             errors = threading.Thread(target=self._read_stderr, args=(job, process, out, write), daemon=True)
             errors.start()
             for line in process.stdout:
@@ -240,6 +275,7 @@ class Builder:
         if not isinstance(e, dict) or "ev" not in e:
             with write:
                 out.write(line)
+                out.flush()
             return
         ev = e["ev"]
         text = None
@@ -247,18 +283,20 @@ class Builder:
             p = job.progress
             if ev == "stage":
                 job.progress = {"k": e.get("k"), "n": e.get("n"), "name": e.get("name") or "", "step": e.get("step") or "",
-                                "frac": None, "eta": None}
+                                **dict.fromkeys(COUNTS)}
                 text = f"── {e.get('k')}/{e.get('n')} {e.get('name')}" + (f": {e['step']}" if e.get("step") else "")
             elif ev in ("step", "progress") and p is not None:
                 for key in ("k", "name", "step"):
                     if e.get(key) is not None:
                         p[key] = e[key]
                 if ev == "step":
-                    p["frac"] = p["eta"] = None
+                    p.update(dict.fromkeys(COUNTS))
                     text = f"   {e.get('step')}"
                 else:
-                    p["frac"] = e.get("frac") if isinstance(e.get("frac"), (int, float)) else None
-                    p["eta"] = e.get("eta") if isinstance(e.get("eta"), (int, float)) else None
+                    for key in COUNTS:  # frac 0-0.99 or null, eta in seconds, done of total in its unit
+                        value = e.get(key)
+                        p[key] = value if (isinstance(value, str) if key == "unit" else
+                                           isinstance(value, (int, float)) and not isinstance(value, bool)) else None
             elif ev == "stage_end":
                 text = f"   {'done' if e.get('ok', True) else 'failed'}" + (f": {e['summary']}" if e.get("summary") else "") \
                     + (f" ({e['elapsed']:.0f} s)" if isinstance(e.get("elapsed"), (int, float)) else "")

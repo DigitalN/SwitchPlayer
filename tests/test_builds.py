@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import builds
+import nxnative
 from nxnative import NxnativeError
 
 FAKE = Path(__file__).resolve().parent / "fake_build.py"
@@ -194,3 +195,89 @@ def test_the_previous_log_is_kept(tmp_path):
 @pytest.mark.parametrize("name, expected", [("Echoes of Wisdom", "Echoes of Wisdom"), ("a/b:c", "a_b_c"), ("…", "_")])
 def test_safe_names(name, expected):
     assert builds.safe_name(name) == expected
+
+
+def test_stop_interrupts_preparation_at_once(tmp_path):
+    """Stop reaches the tool preparation is running (a clone, a package install), and one that
+    starts after Stop is interrupted as it starts."""
+    folder = game(tmp_path, "Ocarina")
+    reached = []
+
+    def prepare(job):
+        job.progress = {"preparing": "Downloading nxnative", "since": time.monotonic()}
+        job.say("── Downloading nxnative")
+        try:
+            nxnative._run([sys.executable, "-c", "import time; print('Cloning into', flush=True); time.sleep(30)"],
+                          out=lambda line: job.say(f"   {line}"), started=job.track)
+        finally:
+            reached.append("clone ended")
+        nxnative._run([sys.executable, "-c", "import time; time.sleep(30)"], out=job.say, started=job.track)
+        reached.append("install ended")
+        return [sys.executable, str(FAKE), str(job.path)], job.path, None
+
+    h = Harness(tmp_path, prepare)
+    h.builder.build("Ocarina", folder, "Ocarina of Time")
+    log_path = tmp_path / "Logs" / "Ocarina.log"
+    h.until(lambda: log_path.is_file() and "Cloning into" in log_path.read_text())
+    status = h.builder.status("Ocarina")
+    assert status["progress"]["preparing"] == "Downloading nxnative" and status["progress"]["elapsed"] >= 0
+    assert "since" not in status["progress"]
+    started = time.time()
+    h.builder.stop("Ocarina")
+    h.wait(1)
+    assert time.time() - started < 3
+    assert h.builder.status("Ocarina")["state"] == "stopped"
+    assert reached == ["clone ended"]  # nothing after it ran
+    assert not (folder / "argv.json").exists()
+    log = (tmp_path / "Logs" / "Ocarina.log").read_text()
+    assert "── Downloading nxnative\n   Cloning into\n" in log and log.rstrip().endswith("Stopped")
+
+
+def test_a_tool_started_after_stop_is_interrupted_at_once(tmp_path):
+    folder = game(tmp_path, "Ocarina")
+    asked = threading.Event()
+
+    def prepare(job):
+        asked.wait(5)  # Stop arrives between two tools
+        nxnative._run([sys.executable, "-c", "import time; time.sleep(30)"], out=job.say, started=job.track)
+        return [sys.executable, str(FAKE), str(job.path)], job.path, None
+
+    h = Harness(tmp_path, prepare)
+    h.builder.build("Ocarina", folder, "Ocarina of Time")
+    h.until(lambda: h.builder.status("Ocarina")["state"] == "building")
+    h.builder.stop("Ocarina")
+    started = time.time()
+    asked.set()
+    h.wait(1)
+    assert time.time() - started < 3 and h.builder.status("Ocarina")["state"] == "stopped"
+
+
+def test_progress_carries_the_stages_counts(tmp_path):
+    folder = game(tmp_path, "Echoes", stages=[["Mac shaders", 2]])
+    h = Harness(tmp_path)
+    h.builder.build("Echoes", folder, "Echoes")
+    h.until(lambda: ((h.builder.status("Echoes") or {}).get("progress") or {}).get("done"))
+    p = h.builder.status("Echoes")["progress"]
+    assert p["total"] == 4 and p["unit"] == "" and 0 < p["frac"] < 1 and p["name"] == "Mac shaders"
+    h.wait(1)
+
+
+def test_quit_while_preparing_ends_the_tool_too(tmp_path):
+    """Issue #12: Quit doesn't leave git or uv running."""
+    folder = game(tmp_path, "Ocarina")
+    processes = []
+
+    def prepare(job):
+        def track(process):
+            processes.append(process)
+            job.track(process)
+        nxnative._run([sys.executable, "-c", "import time; time.sleep(30)"], out=job.say, started=track)
+        return [sys.executable, str(FAKE), str(job.path)], job.path, None
+
+    h = Harness(tmp_path, prepare)
+    h.builder.build("Ocarina", folder, "Ocarina of Time")
+    h.until(lambda: processes)
+    started = time.time()
+    h.builder.stop_all(grace=10)
+    assert time.time() - started < 3
+    assert processes[0].poll() is not None

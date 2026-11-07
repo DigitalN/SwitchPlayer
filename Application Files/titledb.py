@@ -25,12 +25,13 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import library
+
 log = logging.getLogger("switchplayer")
 
 LIST_URL = "https://raw.githubusercontent.com/blawar/titledb/master/US.en.json"
 IMAGE_HOST = "img-eshop.cdn.nintendo.net"  # the list is third-party data: images only from here
 MISSING_LIFETIME = 7 * 86400
-TITLE_ID = re.compile(r"^0100[0-9A-F]{12}$")
 
 
 def clean_name(name):
@@ -185,7 +186,7 @@ class TitleDB:
         """Looks up the titles the index doesn't know yet and downloads the art they lack.
         Slow (the list, then each image): run it off the main thread. Returns the title IDs
         whose name or art is new."""
-        tids = sorted({t for t in tids if t and TITLE_ID.match(t)})
+        tids = sorted({t.upper() for t in tids if library.is_title_id(t)})
         with self._lock:
             index = self._load()
             stale = time.time() - index["fetched"] > MISSING_LIFETIME

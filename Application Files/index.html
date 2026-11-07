@@ -54,7 +54,23 @@ body {
 button { font: inherit; color: inherit; cursor: default; }
 :focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 1px; }
 
-main { height: 100%; overflow-y: auto; padding: 24px 24px 32px; }
+/* ── the window: the grid, and the Build Log pane on its right ── */
+.app { position: relative; display: flex; height: 100%; }
+main { flex: 1; min-width: 0; height: 100%; overflow-y: auto; padding: 0 24px 32px; }
+/* The Build Log button stays at the top while the grid scrolls under it. */
+.toolbar {
+  position: sticky; top: 0; z-index: 5; display: flex; justify-content: flex-end; align-items: center;
+  height: 44px; margin: 0 -24px 2px; padding: 0 12px;
+  background: color-mix(in srgb, var(--bg) 86%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+.tool {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap;
+}
+.tool:hover:not(:disabled) { background: var(--btn); color: var(--text); }
+.tool[aria-pressed="true"] { background: var(--btn); color: var(--text); }
+.tool:disabled { color: var(--faint); }
+.tool svg { flex: none; width: 16px; height: 16px; }
 
 /* ── the grid ────────────────────────────────── */
 .grid {
@@ -94,6 +110,13 @@ main { height: 100%; overflow-y: auto; padding: 24px 24px 32px; }
   overflow: hidden; background: rgba(0,0,0,.5); box-shadow: 0 0 0 .5px rgba(255,255,255,.3);
 }
 .bar > div { height: 100%; width: 0; background: #fff; transition: width .5s linear; }
+/* While a Build prepares there's nothing to count: the fill moves back and forth instead, so
+   the tile shows it's working. Only the fill's position animates, which the compositor does. */
+.bar.busy > div { width: 32% !important; transition: none; animation: busy 1.2s ease-in-out infinite alternate; }
+@keyframes busy { from { transform: translateX(0); } to { transform: translateX(212.5%); } }
+@media (prefers-reduced-motion: reduce) {
+  .bar.busy > div { width: 100% !important; opacity: .5; animation: none; }
+}
 
 .meta { padding: 8px 2px 0; }
 .line { display: flex; align-items: center; gap: 6px; min-height: 20px; }
@@ -138,6 +161,56 @@ main { height: 100%; overflow-y: auto; padding: 24px 24px 32px; }
 .empty b { display: block; color: var(--text); font-size: 15px; margin-bottom: 4px; }
 .empty .btn { display: block; margin: 16px auto 0; }
 
+/* ── the Build Log pane ──────────────────────── */
+.pane {
+  position: relative; flex: none; display: flex; flex-direction: column; width: var(--pane-width, 380px); height: 100%;
+  background: var(--card); border-left: 1px solid var(--line-strong);
+}
+.pane .close { display: none; width: 26px; padding: 0; justify-content: center; font-size: 15px; }
+/* Too narrow for the grid and the pane side by side: the pane covers the grid's right side. */
+@media (max-width: 799px) {
+  .pane {
+    position: absolute; z-index: 15; top: 0; right: 0; bottom: 0; width: min(var(--pane-width, 380px), calc(100vw - 48px));
+    box-shadow: -10px 0 30px rgba(0,0,0,.18);
+  }
+  .pane .close { display: inline-flex; }  /* the pane covers the Build Log button: close it from here */
+}
+.pane-head { flex: none; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); }
+.pane-title { flex: 1; min-width: 0; line-height: 1.25; }
+.pane-title small { display: block; font-size: 11px; color: var(--muted); }
+.pane-title b { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; }
+.log {
+  flex: 1; min-height: 0; overflow: auto; padding: 6px 0 12px;
+  font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace; user-select: text; -webkit-user-select: text; cursor: text;
+}
+.log div { padding: 0 14px 0 28px; text-indent: -14px; white-space: pre-wrap; overflow-wrap: anywhere; }  /* a long line's rest, indented */
+.log .head { margin-top: 7px; font-weight: 600; }
+.log .muted { color: var(--muted); }
+.log .red { color: var(--danger); }
+.live {
+  flex: none; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 6px 14px;
+  border-top: 1px solid var(--line); font-size: 11.5px; font-variant-numeric: tabular-nums;
+}
+.live span { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }  /* % and time left on a second line when the stage's name is long */
+.spinner {
+  flex: none; width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid var(--line-strong); border-top-color: var(--accent); animation: spin .9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 4s; } }
+.latest {
+  position: absolute; right: 14px; bottom: 44px; padding: 3px 11px; border: 0; border-radius: 12px;
+  background: var(--accent); color: #fff; font-size: 11.5px; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.2);
+}
+.live[hidden] + .latest { bottom: 12px; }
+.pane-empty {
+  position: absolute; inset: 44px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 24px; text-align: center; color: var(--muted); font-size: 12px;
+}
+.pane-empty b { margin-bottom: 3px; color: var(--text); font-size: 13px; }
+/* Drag the pane's left edge to set its width. */
+.divider { position: absolute; z-index: 6; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; }
+
 /* ── the ⋯ menu ──────────────────────────────── */
 .menu {
   position: fixed; z-index: 20; min-width: 210px; padding: 5px; border-radius: 9px;
@@ -181,7 +254,14 @@ dialog input:focus { outline: 3px solid color-mix(in srgb, var(--accent) 45%, tr
 </style>
 </head>
 <body>
+<div class="app">
 <main>
+  <div class="toolbar">
+    <button class="tool" id="log-toggle" aria-pressed="false" aria-controls="pane" title="Show or hide the Build Log">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2"/><path d="M10 2.6v10.8"/><path d="M11.6 5.6h1.4M11.6 7.6h1.4M11.6 9.6h1.4" stroke-linecap="round"/></svg>
+      Build Log
+    </button>
+  </div>
   <div class="grid" id="grid"></div>
   <div class="empty" id="empty" hidden>
     <b id="empty-title"></b>
@@ -189,6 +269,20 @@ dialog input:focus { outline: 3px solid color-mix(in srgb, var(--accent) 45%, tr
     <button class="btn primary" id="choose-library" hidden>Choose Library Folder…</button>
   </div>
 </main>
+
+<aside class="pane" id="pane" aria-label="Build Log" hidden>
+  <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Build Log width"></div>
+  <div class="pane-head">
+    <div class="pane-title"><small>Build Log</small><b id="log-game"></b></div>
+    <button class="tool" id="log-console" disabled>Open in Console</button>
+    <button class="tool close" id="log-close" aria-label="Hide the Build Log" title="Hide the Build Log">✕</button>
+  </div>
+  <div class="log" id="log" role="log" tabindex="0"></div>
+  <div class="live" id="live" hidden><i class="spinner"></i><span id="live-text"></span></div>
+  <button class="latest" id="latest" hidden>Jump to Latest</button>
+  <div class="pane-empty" id="pane-empty" hidden><b>No Build yet</b>Press Build on a game to follow it here.</div>
+</aside>
+</div>
 
 <div class="menu" id="menu" role="menu" hidden></div>
 
@@ -235,6 +329,13 @@ function put(el, prop, value) {
   else el.style.setProperty(prop, value);
 }
 
+// How long a preparation step has taken, in seconds.
+function fmtElapsed(secs) {
+  if (!isNum(secs)) return '';
+  const m = Math.floor(secs / 60), s = Math.floor(secs % 60);
+  return m ? `${m} min ${s} s` : `${s} s`;
+}
+
 // nxnative's eta is in seconds, for the stage that's running.
 function fmtLeft(secs) {
   if (!isNum(secs)) return '';
@@ -253,8 +354,11 @@ function statusOf(g) {
       return { text: 'Waiting', act: 'stop' };
     case 'building': {
       const p = g.progress;
-      if (!p) return { text: 'Building', cls: 'building', act: 'stop', bar: 0 };
-      if (p.preparing) return { text: 'Preparing Build', cls: 'building', act: 'stop', detail: esc(p.preparing), bar: 0 };
+      if (!p) return { text: 'Building', cls: 'building', act: 'stop', bar: 0, busy: true };
+      if (p.preparing) {
+        const line = [p.preparing, fmtElapsed(p.elapsed)].filter(Boolean).join(' · ');
+        return { text: 'Preparing Build', cls: 'building', act: 'stop', detail: esc(line), detailTitle: line, bar: 0, busy: true };
+      }
       const pct = isNum(p.frac) ? `${Math.floor(p.frac * 100)}%` : '';
       const nums = [pct, fmtLeft(p.eta)].filter(Boolean).map(s => ` · ${s}`).join('');
       return {
@@ -332,6 +436,7 @@ function updateTile(t, g) {
   put(t.detail, 'html', s.detail || '');
   put(t.detail, 'title', s.detailTitle || '');
   put(t.bar, 'hidden', s.bar == null);
+  put(t.bar, 'class', s.busy ? 'bar busy' : 'bar');
   if (s.bar != null) put(t.fill, 'width', `${(s.bar * 100).toFixed(1)}%`);
 }
 
@@ -368,6 +473,7 @@ function render(lib) {
   });
   for (const [id, t] of tiles) if (!seen.has(id)) { t.el.remove(); tiles.delete(id); }
   if (menuFor && !seen.has(menuFor.game.id)) closeMenu();
+  renderPane(games);
 }
 
 // ── polling ─────────────────────────────────────────────
@@ -400,9 +506,9 @@ grid.addEventListener('click', e => {
   const id = t.game.id;
   switch (b.dataset.act) {
     case 'play': if (t.game.app) call('play', id); break;
-    case 'build': call('build', id); break;
+    case 'build': showPane(); call('build', id); break;
     case 'stop': call('stop', id); break;
-    case 'build-log': call('show_build_log', id); break;
+    case 'build-log': showBuildLog(id); break;
     case 'more': {
       if (menuFor === t) { closeMenu(); break; }
       const r = b.getBoundingClientRect();
@@ -429,6 +535,7 @@ function menuItems(g) {
     ['Build Options…', 'options', true],
     null,
     ['Show Log', 'show_log', g.log],
+    ['Show Build Log', 'show_build_log', g.build_log],
     ['Show in Finder', 'show_in_finder', true],
     null,
     ['Rebuild', 'build', g.app && !busy],
@@ -466,7 +573,11 @@ menu.addEventListener('click', e => {
   const t = menuFor;
   closeMenu();
   if (b.dataset.cmd === 'options') editOptions(t);
-  else call(b.dataset.cmd, t.game.id);
+  else if (b.dataset.cmd === 'show_build_log') showBuildLog(t.game.id);
+  else {
+    if (b.dataset.cmd === 'build') showPane();
+    call(b.dataset.cmd, t.game.id);
+  }
 });
 document.addEventListener('mousedown', e => {
   if (menuFor && !menu.contains(e.target) && e.target !== menuButton) closeMenu();
@@ -484,6 +595,143 @@ document.addEventListener('keydown', e => {
 main.addEventListener('scroll', closeMenu);
 window.addEventListener('resize', closeMenu);
 window.addEventListener('blur', closeMenu);
+
+// ── the Build Log pane ──────────────────────────────────
+// Follows the game that's building; Show Build Log points it at another game until the next
+// Build starts. It reads the log file in pieces, from where the last piece ended (`offset`),
+// starting again when the file is another one (`key`: a new Build of that game).
+const pane = $('pane'), logEl = $('log');
+const PANE_MIN = 280, PANE_MAX = 720, LOG_LINES = 5000;
+const ui = { log_open: true, log_width: 380, log_game: null };
+let paneGames = [], building = null, logKey = null, logOffset = 0, logLoading = false, logReload = false;
+let logAtEnd = true;  // showing the newest line: new lines, and a new width, keep it in view
+const nearEnd = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 24;
+
+function saveUi() {
+  try { api().set_ui_state({ ...ui }); } catch (e) { reportError(`set_ui_state: ${e.message || e}`); }
+}
+function paneWidth(w) {
+  return Math.round(Math.min(PANE_MAX, Math.max(PANE_MIN, Math.min(w, innerWidth - 360))));
+}
+function applyUi() {
+  pane.hidden = !ui.log_open;
+  $('log-toggle').setAttribute('aria-pressed', String(ui.log_open));
+  pane.style.setProperty('--pane-width', `${paneWidth(ui.log_width)}px`);
+  if (logAtEnd) logEl.scrollTop = logEl.scrollHeight;  // a new width wraps lines anew: stay at the newest
+}
+function showPane() {
+  if (ui.log_open) return;
+  ui.log_open = true; applyUi(); saveUi(); renderPane(paneGames);
+}
+function setLogGame(id) {
+  if (ui.log_game === id) return;
+  ui.log_game = id; saveUi();
+  logEl.textContent = ''; logKey = null; logOffset = 0; logAtEnd = true; lastRed = false;
+  $('latest').hidden = true;
+}
+function showBuildLog(id) {
+  setLogGame(id); showPane(); renderPane(paneGames);
+}
+$('log-toggle').addEventListener('click', () => {
+  ui.log_open = !ui.log_open; applyUi(); saveUi();
+  if (ui.log_open) renderPane(paneGames);
+});
+$('log-close').addEventListener('click', () => { ui.log_open = false; applyUi(); saveUi(); });
+$('log-console').addEventListener('click', () => { if (ui.log_game) call('open_build_log', ui.log_game); });
+
+// The line under the log: what the Build is doing right now, as the tile says it, with the
+// stage's count. Never written to the log file.
+function liveLine(g) {
+  if (g.state === 'waiting') return 'Waiting for the Build before it';
+  const p = g.progress;
+  if (!p) return 'Starting the build script';
+  if (p.preparing) return [p.preparing, fmtElapsed(p.elapsed)].filter(Boolean).join(' · ');
+  const count = isNum(p.done) && isNum(p.total) && p.total > 0
+    ? `${p.done.toLocaleString()} of ${p.total.toLocaleString()}${p.unit ? ` ${p.unit}` : ''}` : '';
+  return [`${p.k}/${p.n} ${cap(p.name)}${p.step ? `: ${p.step}` : ''}`, count,
+          isNum(p.frac) ? `${Math.floor(p.frac * 100)}%` : '', fmtLeft(p.eta)].filter(Boolean).join(' · ');
+}
+
+function renderPane(games) {
+  paneGames = games;
+  const now = games.find(g => g.state === 'building');
+  if (now && now.id !== building) setLogGame(now.id);  // a Build started: follow it
+  building = now ? now.id : null;
+  if (!ui.log_open) return;
+  const g = games.find(x => x.id === ui.log_game);
+  const has = !!(g && g.build_log);
+  put($('log-game'), 'text', g ? g.name : '');
+  put($('pane-empty'), 'hidden', has);
+  put(logEl, 'hidden', !has);
+  $('log-console').disabled = !has;
+  const live = has && (g.state === 'building' || g.state === 'waiting');
+  put($('live'), 'hidden', !live);
+  if (live) put($('live-text'), 'text', liveLine(g));
+  if (has) loadLog(g.id);
+}
+
+async function loadLog(id) {
+  if (logLoading) { logReload = true; return; }
+  logLoading = true;
+  try {
+    const piece = await api().build_log(id, logOffset, logKey);
+    if (piece && ui.log_game === id) {
+      if (piece.key !== logKey) { logEl.textContent = ''; logKey = piece.key; logAtEnd = true; lastRed = false; }
+      logOffset = piece.offset;
+      if (piece.text) appendLog(piece.text);
+    }
+  } catch (e) { reportError(`build_log: ${e.message || e}`); }
+  logLoading = false;
+  if (logReload) { logReload = false; const g = paneGames.find(x => x.id === ui.log_game); if (g && g.build_log) loadLog(g.id); }
+}
+
+// nxnative marks an error line "[RED] ", after the time when it comes through stderr
+// ("[21:57:49] [RED] …"); the marker is for programs, so the pane shows the line red without it.
+// The indented lines straight after a red line are the rest of its message.
+const RED = /^(\[\d\d:\d\d:\d\d\] )?\[RED\] /;
+let lastRed = false;
+function lineClass(text) {
+  if (RED.test(text) || /^\s+failed\b/.test(text) || (lastRed && /^ {2}\S/.test(text))) return 'red';
+  if (text.startsWith('── ')) return 'head';
+  if (/^(\$ |  in |Build of |Exit code |Stopped$)/.test(text)) return 'muted';
+  return '';
+}
+function appendLog(text) {
+  const lines = text.replace(/\n$/, '').split('\n');
+  const frag = document.createDocumentFragment();
+  for (const line of lines) {
+    const div = document.createElement('div');
+    div.className = lineClass(line);
+    lastRed = div.className === 'red';
+    div.textContent = line.replace(RED, '$1') || ' ';
+    frag.appendChild(div);
+  }
+  logEl.appendChild(frag);
+  while (logEl.childElementCount > LOG_LINES) logEl.firstElementChild.remove();
+  if (logAtEnd) logEl.scrollTop = logEl.scrollHeight;
+  else $('latest').hidden = false;
+}
+logEl.addEventListener('scroll', () => {
+  logAtEnd = nearEnd();
+  if (logAtEnd) $('latest').hidden = true;
+});
+$('latest').addEventListener('click', () => { logEl.scrollTop = logEl.scrollHeight; $('latest').hidden = true; });
+
+// Drag the left edge for the width, kept for the next launch.
+$('divider').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const divider = $('divider');
+  divider.setPointerCapture(e.pointerId);
+  const move = ev => { ui.log_width = paneWidth(innerWidth - ev.clientX); applyUi(); };
+  const up = () => {
+    divider.removeEventListener('pointermove', move);
+    divider.removeEventListener('pointerup', up);
+    saveUi();
+  };
+  divider.addEventListener('pointermove', move);
+  divider.addEventListener('pointerup', up);
+});
+window.addEventListener('resize', applyUi);
 
 // ── Build Options ───────────────────────────────────────
 // Until nxnative can list a build's options for a program, they're a text field per
@@ -548,7 +796,9 @@ const reportError = msg => { try { api().log_error(msg); } catch (_) { /* bridge
 window.addEventListener('error', e => reportError(`${e.message} (line ${e.lineno})`));
 window.addEventListener('unhandledrejection', e => reportError(`Unhandled: ${e.reason?.message || e.reason}`));
 
-window.addEventListener('pywebviewready', () => {
+window.addEventListener('pywebviewready', async () => {
+  try { Object.assign(ui, await api().ui_state()); } catch (e) { reportError(`ui_state: ${e.message || e}`); }
+  applyUi();
   poll();
   if (!setupSeen) { setupSeen = true; showSetup(); }
 });

@@ -22,8 +22,10 @@ import updater
 log = logging.getLogger("switchplayer")
 
 APP_NAME = "Switch Player"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 BUNDLE_ID = "com.digitaln.switchplayer"
+BUILD_LOG_FIRST = 512 * 1024  # how much of a long Build log the pane starts with
+BUILD_LOG_PIECE = 256 * 1024  # and reads at most at a time
 if os.environ.get("SWITCHPLAYER_DATA_DIR"):
     DATA_DIR = Path(os.environ["SWITCHPLAYER_DATA_DIR"]).expanduser()
     LOG_DIR = DATA_DIR / "Logs"
@@ -47,6 +49,9 @@ class Native:
     def reveal(self, path):
         from AppKit import NSURL, NSWorkspace
         NSWorkspace.sharedWorkspace().activateFileViewerSelectingURLs_([NSURL.fileURLWithPath_(str(path))])
+
+    def open_in_console(self, path):
+        subprocess.run(["/usr/bin/open", "-a", "Console", str(path)], check=True)
 
     def game_running(self, game):
         if not game.app:
@@ -308,15 +313,26 @@ class SwitchPlayerApp:
                              own=values["nxnative_checkout"] is None)
         environment = nxnative.Environment(self._data_dir / "nxnative-python",
                                            Path(__file__).parent / "nxnative-python" / "pyproject.toml")
-        job.progress = {"preparing": "Updating nxnative"}
-        copy.update(say=job.say)
+        # Each step on the tile with how long it has taken, and what its tools print in the Build
+        # log; Stop interrupts them (builds.Job.track).
+        def step(text):
+            job.progress = {"preparing": text, "since": time.monotonic()}
+            job.say(f"── {text}")
+
+        def out(line):
+            job.say(f"   {line}")
+
+        step("Downloading nxnative" if copy.needs_download else "Updating nxnative")
+        copy.update(out=out, started=job.track, say=job.say)
         if not environment.ready():
-            job.progress = {"preparing": "Installing Python packages"}
-        environment.ensure()
-        game = self._games.get(job.game_id)
+            step("Installing Python packages")
+        environment.ensure(out=out, started=job.track)
+        if job.stop_requested:
+            return None
         source = game.nxplay_save_path() if game else None
-        if source:
-            migration.first_build(source, self._save_root / game.title_id / "save")
+        destination = self._save_root / game.title_id / "save" if source else None
+        if source and migration.first_build(source, destination):  # never cut short: Stop waits for it
+            job.say(f"── Brought NX Play's save across to {destination}")
         command = nxnative.build_command(copy, environment, job.path, keys_file=values["keys_file"],
                                          options=values["build_options"].get(job.game_id, ""))
         job.progress = None  # the build script's own events take over
@@ -358,6 +374,7 @@ class SwitchPlayerApp:
                 "out_of_date": current.get("out_of_date", False) or self._files_changed(game),
                 "newer": current.get("newer", 0),
                 "log": self._game_log(game).exists(),
+                "build_log": bool(self._build_log_file(game.id)),
                 "nxplay_save": game.nxplay_save,
                 "options": values["build_options"].get(game.id, ""),
             })
@@ -497,11 +514,58 @@ class SwitchPlayerApp:
             if path.exists():
                 self._dispatch(self._native.reveal, path)
 
-    def _show_build_log(self, game_id):
+    def _build_log(self, game_id, offset=0, key=None):
+        """The next piece of a game's Build log for the Build Log pane, from byte `offset` of the
+        file `key` names: {key, offset, text}, whole lines only. Another file than `key` (a new
+        Build of that game) starts again from its beginning, or its last BUILD_LOG_FIRST bytes."""
+        path = self._build_log_file(game_id)
+        if not path:
+            return None
+        try:
+            with open(path, "rb") as f:
+                stat = os.fstat(f.fileno())
+                current = f"{stat.st_ino}:{getattr(stat, 'st_birthtime', stat.st_ctime)}"
+                if key != current or not isinstance(offset, int) or not 0 <= offset <= stat.st_size:
+                    offset = max(0, stat.st_size - BUILD_LOG_FIRST)
+                    if offset:
+                        f.seek(offset)
+                        offset += len(f.readline())  # from the start of a line
+                f.seek(offset)
+                data = f.read(BUILD_LOG_PIECE)
+        except OSError:
+            return None
+        whole = data[:data.rfind(b"\n") + 1]  # a line still being written comes with the next piece
+        if not whole and len(data) == BUILD_LOG_PIECE:  # unless it's longer than a piece
+            whole = data
+        return {"key": current, "offset": offset + len(whole), "text": whole.decode("utf-8", "replace")}
+
+    def _build_log_file(self, game_id):
+        """The game's last Build log, from this launch or an earlier one."""
         if self._builder:
-            path = self._builder.build_log(game_id)
-            if path and path.exists():
-                self._dispatch(self._native.reveal, path)
+            return self._builder.build_log(game_id)
+        path = builds.log_path(self._log_dir / "Builds", game_id)  # no Build yet this launch
+        return path if path.is_file() else None
+
+    def _open_build_log(self, game_id):
+        path = self._build_log_file(game_id)
+        if path:
+            self._dispatch(self._native.open_in_console, path)
+
+    def _ui_state(self):
+        pane = self._settings.get()["build_log_pane"]
+        return {"log_open": pane["open"], "log_width": pane["width"], "log_game": pane["game"]}
+
+    def _set_ui_state(self, values):
+        if not isinstance(values, dict):
+            return
+        pane = dict(self._settings.get()["build_log_pane"])
+        valid = {"open": lambda v: isinstance(v, bool),
+                 "width": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+                 "game": lambda v: v is None or isinstance(v, str)}
+        for ours, theirs in (("open", "log_open"), ("width", "log_width"), ("game", "log_game")):
+            if theirs in values and valid[ours](values[theirs]):  # anything else keeps what's saved
+                pane[ours] = values[theirs]
+        self._settings.update({"build_log_pane": pane})
 
     def _show_in_finder(self, game_id):
         game = self._games.get(game_id)
@@ -604,8 +668,17 @@ class Api:
     def show_log(self, game_id):
         self._app._show_log(game_id)
 
-    def show_build_log(self, game_id):
-        self._app._show_build_log(game_id)
+    def build_log(self, game_id, offset=0, key=None):
+        return self._app._build_log(game_id, offset, key)
+
+    def open_build_log(self, game_id):
+        self._app._open_build_log(game_id)
+
+    def ui_state(self):
+        return self._app._ui_state()
+
+    def set_ui_state(self, values):
+        self._app._set_ui_state(values)
 
     def show_in_finder(self, game_id):
         self._app._show_in_finder(game_id)

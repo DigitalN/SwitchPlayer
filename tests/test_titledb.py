@@ -155,3 +155,14 @@ def test_clean_name():
     assert titledb.clean_name("Pokémon™ Legends: Z-A") == "Pokémon Legends: Z-A"
     assert titledb.clean_name(" ™ ") is None
     assert titledb.clean_name(None) is None
+
+
+def test_switch_2_games_are_looked_up_too(tmp_path):
+    bananza = "040074A01BF12000"
+    listing = {"70010000095000": {"id": bananza, "name": "Donkey Kong™ Bananza",
+                                  "iconUrl": "https://img-eshop.cdn.nintendo.net/i/bananza.jpg"}}
+    net = FakeNet(listing, images={"https://img-eshop.cdn.nintendo.net/i/bananza.jpg": JPEG})
+    db = titledb.TitleDB(tmp_path, download=net)
+    assert db.update([bananza.lower(), "not a title ID"]) == {bananza}
+    assert db.name(bananza) == "Donkey Kong Bananza"
+    assert db.art(bananza).read_bytes() == JPEG

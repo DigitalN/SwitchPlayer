@@ -7,7 +7,7 @@ A Mac app that builds and plays the player's own Switch games through nxnative, 
 ### Games and where they live
 
 **Game**:
-One Switch title the player owns: its base game, plus any update and DLC.
+One Switch or Switch 2 title the player owns: its base game, plus any update and DLC.
 _Avoid_: ROM
 
 **Library folder**:
@@ -35,6 +35,10 @@ _Avoid_: cancel, abort
 **Build options**:
 The choices nxnative offers for one Build of one Game, left at nxnative's defaults unless the player sets them.
 _Avoid_: settings, pack options
+
+**Build log**:
+What one Build of a Game printed, as Switch Player keeps it: its preparation, nxnative's stages and messages, and how it ended. The **Build Log pane** beside the Library shows it as it grows.
+_Avoid_: output, console, game log (that's the Game app's own log, Show Log)
 
 **Built in NX Play**:
 A Game that NX Play built with nxnative's developer path: its build folder is there, with NX Play's own files, but there's no Game app to Play until Switch Player Builds one.

@@ -9,7 +9,8 @@ A Mac app that builds and plays your own Switch games through [nxnative](https:/
 ## What it does
 
 - Shows your Library as a grid, with each game's own name and eShop artwork.
-- Builds a Mac Game app for each game with nxnative, one Build at a time, with progress, logs and Stop.
+- Builds a Mac Game app for each game with nxnative, one Build at a time, with progress and Stop, and a Build Log beside your Library to follow a long Build line by line.
+- Builds Switch 2 games too, from a `.nup` file or a folder of their files, as nxnative does.
 - Plays a built game straight from its artwork, or opens its own Settings window.
 - Tells you when nxnative has changes for a game you've built, and which ones are worth a rebuild.
 - Picks up where NX Play left off: its Library folder, keys file, builds and saves.
@@ -25,7 +26,7 @@ Switch Player doesn't include any games or keys.
 ## Getting started
 
 1. Open the disk image and drag **Switch Player** to **Applications**.
-2. Open Switch Player. Coming from NX Play? Your Library folder and keys file are picked up automatically. Otherwise choose **Switch Player → Choose Library Folder…**, with one folder (or one `.nup` file) per game, and **Choose Keys File…** if your games need keys.
+2. Open Switch Player. Coming from NX Play? Your Library folder and keys file are picked up automatically. Otherwise choose **Switch Player → Choose Library Folder…**, with one folder (or one `.nup` file) per game, and **Choose Keys File…** if your games need keys. Switch 2 games, as a `.nup` or a folder of their files, need no keys.
 3. **Build Setup** opens each time Switch Player starts and lists what a Build needs. Follow its Xcode and Metal Toolchain steps, and run the one Terminal command it shows for the .NET SDK (it asks for your password, which an app can't), then click **Install Build Tools**. Once everything has a tick, click **Done**.
 4. Click **Build** beside a game. The first Build also downloads nxnative and installs the Python packages it needs, so it takes a little longer.
 5. When the game says **Ready**, click its artwork to play.
@@ -33,6 +34,8 @@ Switch Player doesn't include any games or keys.
 ![Build Setup, with Xcode ready and the Metal Toolchain and Build tools still to do](docs/images/setup.png)
 
 Closing the window doesn't stop a Build. Quitting Switch Player asks first.
+
+To follow a Build as it goes, open the **Build Log** at the top right of the window: it follows whichever game is building, with a live line for the stage it's on. A big game's first Build can take hours, most of it translating shaders; a Switch 2 game also needs tens of gigabytes free for its build folder.
 
 ## Coming from NX Play
 
@@ -42,7 +45,7 @@ To bring a save across again later, choose **Import NX Play Save…** from the g
 
 ## Each game's menu
 
-Click **⋯** or right-click a game for its **Settings…** window, **Build Options…**, **Show Log**, **Show in Finder**, **Rebuild** and **Import NX Play Save…**.
+Click **⋯** or right-click a game for its **Settings…** window, **Build Options…**, **Show Log**, **Show Build Log**, **Show in Finder**, **Rebuild** and **Import NX Play Save…**.
 
 ![The ⋯ menu for a game that's ready to play](docs/images/menu.png)
 

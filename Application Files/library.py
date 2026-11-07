@@ -9,17 +9,23 @@ Info.plist. Two details aren't documented yet and are read under ADR 0001's exce
 its pull request (the fourth in docs/DESIGN.md) is merged, opened yet or not, because a wrong
 answer could only change what's shown: the `DMCommit` and `DMChain` keys, which only the Out of date
 check uses (nxnative.py), and the name of the `<title ID>_survey` folder, which keeps a build's
-survey from being taken for a Game folder. Only reads: nothing here writes to the Library folder.
+survey from being taken for a Game folder. A .nup's title ID, before its first Build, comes from
+the container's own header (the NUP format, https://github.com/a55uka/nup, not nxnative's code).
+Only reads: nothing here writes to the Library folder.
 """
 
+import functools
 import plistlib
 import re
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-TAGGED_ID = re.compile(r"\[(0100[0-9A-F]{12})\]", re.I)
-BUILD_FOLDER = re.compile(r"^(0100[0-9A-F]{12})_build$", re.I)
-SURVEY_FOLDER = re.compile(r"^0100[0-9A-F]{12}_survey$", re.I)  # undocumented: see DESIGN.md's pull request 4
+# A Switch game's title ID starts 0100 and a Switch 2 game's 0400; nxnative builds both.
+TITLE_ID = r"0[14]00[0-9A-F]{12}"
+TAGGED_ID = re.compile(rf"\[({TITLE_ID})\]", re.I)
+BUILD_FOLDER = re.compile(rf"^({TITLE_ID})_build$", re.I)
+SURVEY_FOLDER = re.compile(rf"^{TITLE_ID}_survey$", re.I)  # undocumented: see DESIGN.md's pull request 4
 NXPLAY_FILES = ("start_mac.sh", "nxplay-settings.json")  # NX Play writes these into a build folder; nxnative doesn't
 LEADING_ARTICLE = re.compile(r"^the\s+", re.I)
 
@@ -69,6 +75,11 @@ class Game:
         return titledb_name or (self.path.stem if self.path.suffix.lower() == ".nup" else self.path.name)
 
 
+def is_title_id(value):
+    """A Switch or Switch 2 title ID, in either case."""
+    return isinstance(value, str) and re.fullmatch(TITLE_ID, value, re.I) is not None
+
+
 def base_id(tid):
     """A base game's, update's or DLC's title ID → the base game's."""
     value = int(tid, 16)
@@ -90,6 +101,51 @@ def title_id_from_names(names):
     return base_id(tags[0]) if tags else None
 
 
+# The NUP header, version 1: its superblock, then the table of contents at toc_offset, which
+# starts with its own header and one record per package (base game, update, DLC, …).
+NUP_SUPER = struct.Struct("<4sHHQQ")  # magic "NUP\x01", header size, -, TOC offset, TOC size
+NUP_TOC = struct.Struct("<4sI")  # magic "TOC\x01", package count
+NUP_TOC_SIZE, NUP_PACKAGE_SIZE = 0x30, 0x40
+NUP_PACKAGE = struct.Struct("<QIIIIB")  # title ID, root, ExeFS, RomFS, version, kind
+NUP_KINDS = (0, 1, 2)  # base game, update, DLC: the order to take a title ID from
+NUP_MAX_PACKAGES = 4096
+
+
+def nup_title_id(path):
+    """The base game's title ID from a .nup's package table, or None for a file that isn't a
+    readable NUP. Only those few hundred bytes are read: no hashes are checked, since a wrong
+    answer could only change the art and name shown before the first Build."""
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return _nup_title_id(str(path), stat.st_size, stat.st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=256)  # by size and modified time too: the Library is scanned every 2 s
+def _nup_title_id(path, size, mtime_ns):
+    try:
+        with open(path, "rb") as f:
+            magic, _, _, toc_offset, toc_size = NUP_SUPER.unpack(f.read(NUP_SUPER.size))
+            if magic != b"NUP\x01" or toc_offset + toc_size > size:
+                return None
+            f.seek(toc_offset)
+            toc_magic, count = NUP_TOC.unpack(f.read(NUP_TOC.size))
+            if toc_magic != b"TOC\x01" or not 0 < count <= NUP_MAX_PACKAGES \
+                    or NUP_TOC_SIZE + count * NUP_PACKAGE_SIZE > toc_size:
+                return None
+            f.seek(toc_offset + NUP_TOC_SIZE)
+            table = f.read(count * NUP_PACKAGE_SIZE)
+    except (OSError, struct.error):
+        return None
+    packages = [NUP_PACKAGE.unpack_from(table, i * NUP_PACKAGE_SIZE) for i in range(len(table) // NUP_PACKAGE_SIZE)]
+    for kind in NUP_KINDS:
+        for tid, *_, package_kind in packages:
+            if package_kind == kind and is_title_id(f"{tid:016X}"):
+                return base_id(f"{tid:016X}")
+    return None
+
+
 def read_app(path):
     """A Game app's facts from its Info.plist, or None for anything that isn't one."""
     try:
@@ -98,7 +154,7 @@ def read_app(path):
     except (OSError, plistlib.InvalidFileException, ValueError):
         return None
     tid = info.get("DMTitleID")
-    if not isinstance(tid, str) or not re.fullmatch(r"0100[0-9A-Fa-f]{12}", tid):
+    if not is_title_id(tid):
         return None
     text = lambda key: info[key].strip() if isinstance(info.get(key), str) and info[key].strip() else None
     return GameApp(path=path, title_id=tid.upper(), name=text("CFBundleDisplayName") or text("CFBundleName"),
@@ -123,7 +179,8 @@ def _game_folder(path):
     entries = list(path.iterdir())
     names = [p.name for p in entries]
     build = next((p for p in entries if p.is_dir() and BUILD_FOLDER.match(p.name)), None)
-    tid = (BUILD_FOLDER.match(build.name).group(1).upper() if build else None) or title_id_from_names(names)
+    tid = (BUILD_FOLDER.match(build.name).group(1).upper() if build else None) or title_id_from_names(names) \
+        or next(filter(None, (nup_title_id(p) for p in entries if p.suffix.lower() == ".nup" and p.is_file())), None)
     apps = _apps_in(path)
     app = next((a for a in apps if a.title_id == tid), None) or (apps[0] if apps and not tid else None)
     tid = tid or (app.title_id if app else None)
@@ -149,7 +206,7 @@ def scan(library):
         elif p.is_file() and p.suffix.lower() == ".nup":
             if top_apps is None:
                 top_apps = _apps_in(library)
-            tid = title_id_from_names([p.name])
+            tid = title_id_from_names([p.name]) or nup_title_id(p)
             app = next((a for a in top_apps if a.title_id == tid), None) if tid else None
             games.append(Game(id=p.name, path=p, title_id=tid, app=app,
                               build_folder=_build_folder(library, tid)))

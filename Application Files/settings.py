@@ -20,7 +20,10 @@ DEFAULTS = {
     "keys_file": None,  # prod.keys, for Game folders of .nsp and .xci files
     "nxnative_checkout": None,  # another nxnative checkout to build with, which Switch Player never changes
     "build_options": {},  # {game id: options as typed}, only for games that have some
+    # The Build Log pane: shown or not, its width, and the game whose log it showed last
+    "build_log_pane": {"open": True, "width": 380, "game": None},
 }
+PANE_WIDTHS = (280, 720)
 
 
 def _path(value):
@@ -29,7 +32,7 @@ def _path(value):
 
 def validate(raw):
     """A complete, valid settings dict built from `raw` (unknown keys dropped)."""
-    s = {**DEFAULTS, "build_options": {}}
+    s = {**DEFAULTS, "build_options": {}, "build_log_pane": dict(DEFAULTS["build_log_pane"])}
     if not isinstance(raw, dict):
         return s
     for key in ("library_folder", "keys_file", "nxnative_checkout"):
@@ -37,6 +40,15 @@ def validate(raw):
     options = raw.get("build_options")
     if isinstance(options, dict):
         s["build_options"] = {k: v.strip() for k, v in options.items() if isinstance(k, str) and isinstance(v, str) and v.strip()}
+    pane = raw.get("build_log_pane")
+    if isinstance(pane, dict):
+        if isinstance(pane.get("open"), bool):
+            s["build_log_pane"]["open"] = pane["open"]
+        width = pane.get("width")
+        if isinstance(width, (int, float)) and not isinstance(width, bool):
+            s["build_log_pane"]["width"] = int(min(PANE_WIDTHS[1], max(PANE_WIDTHS[0], width)))
+        if isinstance(pane.get("game"), str) and pane["game"]:
+            s["build_log_pane"]["game"] = pane["game"]
     return s
 
 
@@ -73,13 +85,17 @@ class Settings:
 
     def get(self):
         with self._lock:
-            return {**self._values, "build_options": dict(self._values["build_options"])}
+            return self._copy()
 
     def update(self, changes):
         with self._lock:
             self._values = validate({**self._values, **changes})
             self._save()
-            return {**self._values, "build_options": dict(self._values["build_options"])}
+            return self._copy()
+
+    def _copy(self):
+        return {**self._values, "build_options": dict(self._values["build_options"]),
+                "build_log_pane": dict(self._values["build_log_pane"])}
 
     def set_build_options(self, game_id, text):
         with self._lock:

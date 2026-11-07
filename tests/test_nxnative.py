@@ -1,5 +1,7 @@
 import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -157,7 +159,7 @@ def test_environment_syncs_only_when_its_package_list_changes(monkeypatch, tmp_p
     uv = tmp_path / "uv"
     calls = []
 
-    def fake_run(argv, cwd=None, env=None, timeout=None):
+    def fake_run(argv, cwd=None, env=None, timeout=None, out=None, started=None):
         calls.append((argv, cwd, env, timeout))
         environment.python.parent.mkdir(parents=True, exist_ok=True)
         environment.python.touch()
@@ -291,3 +293,67 @@ def test_unreadable_build_options_are_a_player_facing_error(tmp_path):
 
     with pytest.raises(nxnative.NxnativeError, match="Build Options can't be read"):
         nxnative.build_command(copy, environment, tmp_path / "Game", options="'unterminated")
+
+
+def test_preparation_streams_each_line_and_hands_over_its_process():
+    lines, processes = [], []
+    script = "import sys; print('one'); sys.stdout.write('5%\\r50%\\r100%, done.\\n'); print(); print('two')"
+    output = nxnative._run([sys.executable, "-c", script], out=lines.append, started=processes.append)
+    assert lines == ["one", "100%, done.", "two"]  # a line rewritten in place, once, as it ends
+    assert output.endswith("two")
+    assert len(processes) == 1 and processes[0].returncode == 0
+
+
+def test_preparations_error_is_its_last_line():
+    with pytest.raises(nxnative.NxnativeError, match="^fatal: unable to access$"):
+        nxnative._run([sys.executable, "-c", "import sys; print('working'); print('fatal: unable to access'); sys.exit(128)"],
+                      out=lambda line: None)
+
+
+def test_preparation_that_runs_too_long_is_ended():
+    started = time.monotonic()
+    with pytest.raises(nxnative.NxnativeError, match="took longer than 0 minutes"):
+        nxnative._run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.3, out=lambda line: None)
+    assert time.monotonic() - started < 5
+
+
+def test_a_first_build_downloads_nxnative_and_says_so(tmp_path):
+    upstream = Upstream(tmp_path)
+    copy = nxnative.Copy(tmp_path / "data" / "nxnative", own=True, upstream=str(upstream.bare))
+    assert copy.needs_download
+    lines = []
+    copy.update(out=lines.append, started=lambda process: None)
+    assert not copy.needs_download and copy.ready()
+    assert any("Cloning into" in line for line in lines)
+    upstream.commit("print('second')\n")
+    upstream.push()
+    lines.clear()
+    copy.update(out=lines.append, started=lambda process: None)
+    assert any("HEAD is now at" in line for line in lines)  # the Engine update, in the Build log
+    assert not nxnative.Copy(tmp_path / "players", own=False).needs_download  # the player's: never downloaded
+
+
+def test_a_fetch_stop_interrupted_stops_the_build_but_offline_falls_back(tmp_path, monkeypatch):
+    """#15 falls back to the copy as it is when upstream can't be reached; a fetch that Stop
+    interrupted (SIGINT: a negative exit code) must fail instead, so the Build ends as Stopped."""
+    upstream = Upstream(tmp_path)
+    copy = nxnative.Copy(tmp_path / "data" / "nxnative", own=True, upstream=str(upstream.bare))
+    copy.update()
+    said = []
+
+    def offline(*args, **kwargs):
+        raise nxnative.NxnativeError("Could not resolve host: github.com", returncode=128)
+
+    monkeypatch.setattr(copy, "fetch", offline)
+    assert copy.update(out=lambda line: None, started=lambda process: None, say=said.append) == copy.commit()
+    assert said and said[0].startswith("Couldn't reach nxnative's upstream")
+
+    def stopped(*args, **kwargs):
+        raise nxnative.NxnativeError("git fetch failed (-2)", returncode=-2)
+
+    monkeypatch.setattr(copy, "fetch", stopped)
+    with pytest.raises(nxnative.NxnativeError):
+        copy.update(out=lambda line: None, started=lambda process: None, say=said.append)
+    assert len(said) == 1
+    assert nxnative.interrupted(nxnative.NxnativeError("x", returncode=130))
+    assert not nxnative.interrupted(nxnative.NxnativeError("x")) and not nxnative.interrupted(ValueError())
