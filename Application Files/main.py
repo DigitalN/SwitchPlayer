@@ -128,6 +128,13 @@ class Native:
             AppKit.NSWorkspaceDidWakeNotification, None, None, lambda notification: app._refresh_freshness(),
         )
 
+    def show_bundle_icon(self, icon):
+        """The Dock tile shows the app's own icon file this launch, whatever macOS has cached."""
+        import AppKit
+        image = AppKit.NSImage.alloc().initWithContentsOfFile_(str(icon))
+        if image is not None:
+            AppKit.NSApp.setApplicationIconImage_(image)
+
     def convert_icon(self, source, output):
         output.parent.mkdir(parents=True, exist_ok=True)
         part = output.with_suffix(".partial.jpg")
@@ -278,6 +285,18 @@ class SwitchPlayerApp:
         """Check for nxnative Updates…: compare in the background, then answer with an alert."""
         threading.Thread(target=self._check_nxnative, name="nxnative-check", daemon=True).start()
 
+    def _refresh_icon_if_updated(self, app):
+        """A new version's first launch: show the bundle's own icon in the Dock now, and refresh
+        what macOS cached for this path in the background (launch.refresh_icon_cache). Later
+        launches leave the Dock tile to macOS, with its icon styles."""
+        if app is None or not launch.is_new_version(self._data_dir, VERSION):
+            return
+        icon = launch.icon_file(app)
+        if icon:
+            self._native.show_bundle_icon(icon)
+        threading.Thread(target=launch.refresh_icon_cache, args=(app, self._data_dir, VERSION),
+                         name="icon-refresh", daemon=True).start()
+
     def _check_nxnative(self):
         title, message = self._nxnative_report()
         self._dispatch(self._native.alert, title, message)
@@ -286,6 +305,7 @@ class SwitchPlayerApp:
         if webview is None:
             import webview
         self._native.install_lifecycle(self)
+        self._refresh_icon_if_updated(launch.bundle_path())
         menus = [webview.Menu("__app__", [
             webview.menu.MenuAction("Choose Library Folder…", self.choose_library),
             webview.menu.MenuAction("Choose Keys File…", self.choose_keys),
