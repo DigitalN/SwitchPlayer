@@ -824,7 +824,7 @@ def test_library_reports_freshness_after_a_background_fetch(tmp_path, monkeypatc
     started = threading.Event()
     release = threading.Event()
 
-    def freshness(self, apps):
+    def freshness(self, apps, built=None):
         started.set()
         release.wait(5)
         return {tid: {"out_of_date": True, "newer": 142}}
@@ -847,6 +847,50 @@ def test_library_reports_freshness_after_a_background_fetch(tmp_path, monkeypatc
     game = api.library()["games"][0]
     assert game["out_of_date"] is True
     assert game["newer"] == 142
+
+
+def test_a_finished_build_records_its_nxnative_commit_for_the_freshness_check(tmp_path, monkeypatch):
+    """nxnative keeps a reused Game app's old DMCommit (#20), so the check counts from the commit
+    Switch Player's own Build ran with."""
+    import builds
+
+    tid = "0100D9F01D474000"
+    library_folder = tmp_path / "Switch Games"
+    folder = library_folder / "Rhythm Heaven"
+    contents = folder / "Rhythm Heaven Groove.app" / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({
+        "DMTitleID": tid, "CFBundleDisplayName": "Rhythm Heaven Groove", "DMCommit": "123456789abc", "DMChain": "b-41"}))
+    monkeypatch.setattr(nxnative.Copy, "update", lambda self, **kwargs: "fedcba987654")
+    monkeypatch.setattr(nxnative.Copy, "build_commit", lambda self: "fedcba987654")
+    monkeypatch.setattr(nxnative.Environment, "ready", lambda self: True)
+    monkeypatch.setattr(nxnative, "build_command", lambda *args, **kwargs: (["true"], folder, {}))
+    seen = []
+    monkeypatch.setattr(nxnative.Copy, "freshness", lambda self, apps, built=None: seen.append(built) or {})
+
+    class BuildNative(FakeNative):
+        def notify(self, title, message):
+            pass
+
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", native=BuildNative(),
+                               dispatch=lambda function, *args: function(*args),
+                               first_launch=lambda: {"library_folder": str(library_folder)})
+    app._library()
+    app._fetch_freshness()
+    assert seen[-1] == {tid: None}
+
+    job = builds.Job(game_id="Rhythm Heaven", path=folder, name="Rhythm Heaven Groove")
+    app._prepare(job)
+    app._build_finished(job, False)  # stopped or failed: not what the Game app was built with
+    app._fetch_freshness()
+    assert seen[-1] == {tid: None}
+
+    app._prepare(job)
+    app._build_finished(job, True)
+    app._fetch_freshness()
+    assert seen[-1] == {tid: "fedcba987654"}
+    assert main.SwitchPlayerApp(data_dir=tmp_path / "data", native=BuildNative(),
+                                first_launch=dict)._records.commit("Rhythm Heaven") == "fedcba987654"
 
 
 def test_freshness_refreshes_daily_or_on_demand(tmp_path, monkeypatch):
@@ -935,6 +979,7 @@ def test_out_of_date_goes_by_the_game_files_each_build_started_with(tmp_path, mo
     app._prepare(job)
     app._build_finished(job, True)
     assert out_of_date() is False
+    assert app._records.commit("Rhythm Heaven") is None  # a folder git can't read has no commit to record
 
     gained = folder / f"More [{tid[:-3]}002].nsp"  # now it is caught, old date and all
     gained.write_bytes(b"m" * 90)
@@ -959,20 +1004,33 @@ def test_nxnative_check_answers_like_the_app_update_check(tmp_path, monkeypatch)
     app._last_scan = None
     answers = {zelda: {"out_of_date": False, "newer": 0}, rhythm: {"out_of_date": False, "newer": 0},
                mario: {"out_of_date": False, "newer": 0}}
-    monkeypatch.setattr(nxnative.Copy, "freshness", lambda self, apps: answers)
+    monkeypatch.setattr(nxnative.Copy, "freshness", lambda self, apps, built=None: answers)
     assert app._nxnative_report() == ("Your games are up to date with nxnative",
                                       "Your next Build will use the latest nxnative.")
 
-    answers[zelda] = {"out_of_date": True, "newer": 3}
+    # Counts, not names: a big Library's alert stays short, and the tiles say which.
     answers[rhythm] = {"out_of_date": False, "newer": 1200}
-    assert app._nxnative_report() == (
-        "nxnative has changes for 2 games",
-        "Out of date, consider rebuilding: Echoes of Wisdom. "
-        "Newer changes that don't need a rebuild: Rhythm Heaven Groove (1,200).",
-    )
+    assert app._nxnative_report() == ("nxnative has changes for 1 game",
+                                      "It isn't out of date. It has changes since its last Build.")
+
+    answers[mario] = {"out_of_date": False, "newer": 2}
+    assert app._nxnative_report() == ("nxnative has changes for 2 games",
+                                      "None are out of date. Each has changes since its last Build.")
+
+    answers[zelda] = {"out_of_date": True, "newer": 3}
+    assert app._nxnative_report() == ("nxnative has changes for 3 games",
+                                      "1 is out of date, consider rebuilding it. 2 more have changes since their last Build.")
+
+    answers[mario] = {"out_of_date": True, "newer": 2}
+    assert app._nxnative_report() == ("nxnative has changes for 3 games",
+                                      "2 are out of date, consider rebuilding them. 1 more has changes since its last Build.")
+
+    answers[rhythm] = {"out_of_date": False, "newer": 0}
+    assert app._nxnative_report() == ("nxnative has changes for 2 games",
+                                      "2 are out of date, consider rebuilding them.")
     assert app._freshness == answers
 
-    def fail(self, apps):
+    def fail(self, apps, built=None):
         raise nxnative.NxnativeError("Couldn't reach GitHub.")
 
     monkeypatch.setattr(nxnative.Copy, "freshness", fail)
@@ -989,7 +1047,7 @@ def test_an_offline_nxnative_check_says_it_compared_with_what_was_fetched_before
                                native=FakeNative())
     answers = {zelda: {"out_of_date": False, "newer": 0}, rhythm: {"out_of_date": False, "newer": 0}}
 
-    def offline(self, apps):
+    def offline(self, apps, built=None):
         self.fetch_error = "Could not resolve host: github.com"
         return answers
 
@@ -1001,7 +1059,7 @@ def test_an_offline_nxnative_check_says_it_compared_with_what_was_fetched_before
     answers[zelda] = {"out_of_date": True, "newer": 3}
     title, message = app._nxnative_report()
     assert title == "nxnative has changes for 1 game"
-    assert message == ("Out of date, consider rebuilding: Echoes of Wisdom. Switch Player couldn't reach GitHub "
+    assert message == ("1 is out of date, consider rebuilding it. Switch Player couldn't reach GitHub "
                        "(Could not resolve host: github.com), so this compares with the nxnative it last fetched.")
     assert app._freshness == answers  # the tiles show it too
 

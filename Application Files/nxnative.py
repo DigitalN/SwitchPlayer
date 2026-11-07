@@ -147,6 +147,18 @@ class Copy:
         except NxnativeError:
             return None
 
+    def build_commit(self):
+        """The commit a Build from this checkout records, as nxnative's packer writes `DMCommit`:
+        `+dirty` when tracked files have uncommitted edits. None when git can't tell."""
+        commit = self.commit()
+        if not commit:
+            return None
+        try:
+            dirty = git(self.path, "status", "--porcelain", "--untracked-files=no", timeout=60)
+        except NxnativeError:
+            return None
+        return commit + ("+dirty" if dirty else "")
+
     @property
     def needs_download(self):
         """Switch Player's own copy isn't there yet: the next update() clones it."""
@@ -221,13 +233,42 @@ class Copy:
                 return None
             raise
 
-    def freshness(self, apps):
+    def _since(self, app_commit, recorded):
+        """The commit to count a Game app's changes from: the one its last Build ran with
+        (`recorded`) when this copy has it and it isn't older than the Game app's `DMCommit`, else
+        `DMCommit`. A Game app replaced by a newer build since keeps its own."""
+        if not recorded:
+            return app_commit
+        ran = self._known_commit(recorded.removesuffix("+dirty"))
+        if ran is None:
+            return app_commit
+        packed = self._known_commit(app_commit.removesuffix("+dirty"))
+        if packed is None or packed == ran or self._is_ancestor(packed, ran):
+            return recorded
+        return app_commit
+
+    def _is_ancestor(self, older, newer):
+        try:
+            git(self.path, "merge-base", "--is-ancestor", older, newer, timeout=30)
+            return True
+        except NxnativeError as e:
+            if e.returncode == 1:
+                return False
+            raise
+
+    def freshness(self, apps, built=None):
         """Fetched changes since each Game app's Build, without moving this checkout.
+
+        `built` is {title ID: the commit Switch Player's last finished Build of it ran with}
+        (records.py). Changes are counted from that or the Game app's `DMCommit`, whichever is
+        newer: the packer keeps the old `DMCommit` when it reuses a Game app (#20), so without it
+        a Rebuild couldn't clear changes that never reached the game.
 
         Adapted from NX Play's ask_update() and no_local_commits() (the `nxplay` script in
         varyform/nx-native-wrapper; MIT, see THIRD-PARTY-NOTICES): the commit a build was made
         from, the commits since, those touching `dm/games/<title ID>`, and whether the shader
         version differs."""
+        built = built or {}
         result = {app.title_id: {"out_of_date": False, "newer": 0} for app in apps if app}
         if not result:
             return result
@@ -243,13 +284,13 @@ class Copy:
             if not app or not app.commit:
                 continue
             # `+dirty`: nxnative's checkout had uncommitted edits, which can't be compared, so it's
-            # counted from the commit under them. Only counted: nxnative's packer reuses a Game app
-            # whose inputs haven't changed and keeps its old DMCommit, so a Build from the same
-            # checkout couldn't always clear a yellow line (#20).
-            dirty = app.commit.endswith("+dirty")
-            base = self._known_commit(app.commit.removesuffix("+dirty"))
+            # counted from the commit under them and never Out of date: what the edits changed
+            # can't be told.
+            commit = self._since(app.commit, built.get(app.title_id))
+            dirty = commit.endswith("+dirty")
+            base = self._known_commit(commit.removesuffix("+dirty"))
             if base is None:  # built from a commit this copy hasn't got: a missing detail for this game alone
-                log.info("%s was built from nxnative %s, which this copy doesn't have", app.title_id, app.commit)
+                log.info("%s was built from nxnative %s, which this copy doesn't have", app.title_id, commit)
                 continue
             newer = int(git(self.path, "rev-list", "--count", f"{base}..{target}", timeout=60))
             changed = bool(git(self.path, "log", "--format=%H", "-1", f"{base}..{target}", "--",
@@ -260,8 +301,9 @@ class Copy:
                 chain = ""
             current_chain = next((line.split('"')[1] for line in chain.splitlines()
                                   if line.startswith('#define DMSH_CHAIN "')), None)
-            # A Vulkan or GL game has no DMChain, and with that detail missing only the count shows
-            # (DESIGN.md, pull request 4): not even a change to the game's own files turns it yellow.
+            # A Vulkan or GL game has no DMChain, and with that detail missing it's never Out of date,
+            # only changed (DESIGN.md, pull request 4): not even a change to the game's own files
+            # turns it yellow.
             out_of_date = app.chain is not None and not dirty and (
                 changed or (current_chain is not None and current_chain != app.chain))
             result[app.title_id] = {"out_of_date": out_of_date, "newer": newer}

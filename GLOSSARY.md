@@ -45,7 +45,7 @@ A Game that NX Play built with nxnative's developer path: its build folder is th
 _Avoid_: build incomplete, half-built
 
 **Out of date**:
-A Game app that nxnative has since changed something for specifically (that Game's own files, or anything that remakes its shaders), or whose Game folder has gained files since its Build. Other newer nxnative changes are counted, not warned about.
+A Game app that nxnative has since changed something for specifically (that Game's own files, or anything that remakes its shaders), or whose Game folder has gained files since its Build. Other nxnative changes since its last Build are mentioned, with Rebuild beside them, but not warned about.
 _Avoid_: stale, old
 
 ### Playing

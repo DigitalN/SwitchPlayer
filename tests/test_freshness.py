@@ -97,10 +97,9 @@ def test_game_files_added_since_the_build_make_it_out_of_date(tmp_path):
     assert nxnative.game_files_changed(game) is True
 
 
-def test_a_dirty_build_shows_only_the_count_from_the_commit_under_the_edits(tmp_path, upstream):
-    """Uncommitted edits can't be compared. Nor can a Build always clear a yellow line for them:
-    after committing the edit, a second Build reuses the Game app and keeps `X+dirty` (#20), while
-    X..HEAD touches the game's folder. So a +dirty Game app is never yellow."""
+def test_a_dirty_build_is_never_out_of_date_and_counts_from_the_commit_under_the_edits(tmp_path, upstream):
+    """Uncommitted edits can't be compared: what they changed can't be told, so a +dirty Game app
+    is never yellow."""
     built = upstream.commit("print('built')\n")
     upstream.push()
     copy = nxnative.Copy(tmp_path / "copy", own=True, upstream=str(upstream.bare))
@@ -116,7 +115,77 @@ def test_a_dirty_build_shows_only_the_count_from_the_commit_under_the_edits(tmp_
     assert copy.freshness([app])["0100D9F01D474000"] == {"out_of_date": False, "newer": 2}
 
 
-def test_a_game_app_without_a_shader_version_shows_only_the_count(tmp_path, upstream):
+def test_a_rebuild_that_reuses_the_game_app_still_clears_its_changes(tmp_path, upstream):
+    """nxnative's packer keeps a reused Game app's old DMCommit (#20): counted from the commit the
+    Build ran with instead, a Rebuild clears changes that never reached the game, yellow ones too."""
+    built = upstream.commit("print('built')\n")
+    upstream.push()
+    copy = nxnative.Copy(tmp_path / "copy", own=True, upstream=str(upstream.bare))
+    copy.update()
+    app = game_app(tmp_path, built[:12])
+    tid = "0100D9F01D474000"
+    commit_file(upstream, f"dm/games/{tid}/README.md", "notes that aren't packed\n")
+    upstream.push()
+
+    assert copy.freshness([app]) == {tid: {"out_of_date": True, "newer": 1}}
+
+    copy.update()  # a Rebuild's Engine update; the packer reuses the Game app, DMCommit and all
+    ran = copy.build_commit()
+    assert ran == subprocess.run(
+        ["/usr/bin/git", "-C", str(upstream.work), "rev-parse", "--short=12", "HEAD"],
+        check=True, capture_output=True, text=True).stdout.strip()
+
+    assert copy.freshness([app], {tid: ran}) == {tid: {"out_of_date": False, "newer": 0}}
+
+    commit_file(upstream, "dm/host/other.c", "after the Rebuild\n")
+    upstream.push()
+    assert copy.freshness([app], {tid: ran}) == {tid: {"out_of_date": False, "newer": 1}}
+
+
+def test_a_game_app_newer_than_its_record_counts_from_its_own_commit(tmp_path, upstream):
+    tid = "0100D9F01D474000"
+    first = upstream.commit("print('first build')\n")
+    second = commit_file(upstream, "dm/host/other.c", "second\n")
+    upstream.push()
+    copy = nxnative.Copy(tmp_path / "copy", own=True, upstream=str(upstream.bare))
+    copy.update()
+    app = game_app(tmp_path, second[:12])  # built again since, outside Switch Player
+
+    assert copy.freshness([app], {tid: first[:12]}) == {tid: {"out_of_date": False, "newer": 0}}
+    assert copy.freshness([app], {tid: "feedfacefeed"}) == {tid: {"out_of_date": False, "newer": 0}}  # unknown: DMCommit
+
+    older = game_app(tmp_path / "older", first[:12])
+    assert copy.freshness([older], {tid: "feedfacefeed"}) == {tid: {"out_of_date": False, "newer": 1}}
+
+
+def test_a_build_recorded_from_edits_is_never_out_of_date(tmp_path, upstream):
+    tid = "0100D9F01D474000"
+    first = upstream.commit("print('first build')\n")
+    second = commit_file(upstream, "dm/host/other.c", "second\n")
+    commit_file(upstream, f"dm/games/{tid}/profile.toml", "changed\n")
+    upstream.push()
+    copy = nxnative.Copy(tmp_path / "copy", own=True, upstream=str(upstream.bare))
+    copy.update()
+    app = game_app(tmp_path, first[:12])
+
+    assert copy.freshness([app], {tid: second[:12] + "+dirty"}) == {tid: {"out_of_date": False, "newer": 1}}
+
+
+def test_the_recorded_commit_says_when_tracked_files_had_edits(tmp_path, upstream):
+    copy = nxnative.Copy(upstream.work, own=False)
+    head = copy.commit()
+    assert copy.build_commit() == head
+
+    (upstream.work / "untracked.txt").write_text("not nxnative's\n")
+    assert copy.build_commit() == head  # as nxnative's packer: untracked files don't count
+
+    (upstream.work / nxnative.BUILD_SCRIPT).write_text("print('edited')\n")
+    assert copy.build_commit() == head + "+dirty"
+
+    assert nxnative.Copy(tmp_path / "missing", own=False).build_commit() is None
+
+
+def test_a_game_app_without_a_shader_version_is_never_out_of_date(tmp_path, upstream):
     """A Vulkan or GL game has no DMChain: its Game app isn't Out of date because nxnative has one."""
     built = upstream.commit("print('built')\n")
     commit_file(upstream, "dm/gfx/nvn/dmsh_chain.h", '#define DMSH_CHAIN "b-41"\n')
