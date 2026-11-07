@@ -87,7 +87,7 @@ def test_game_files_added_since_the_build_make_it_out_of_date(tmp_path):
     from library import Game
 
     app = game_app(tmp_path, "123456789abc")
-    game = Game(id="Rhythm Heaven", path=app.path.parent.parent, title_id=app.title_id, app=app, nxplay_save=False)
+    game = Game(id="Rhythm Heaven", path=app.path.parent.parent, title_id=app.title_id, app=app)
     old = 1_000_000_000
     os.utime(app.path / "Contents" / "Info.plist", (old, old))
 

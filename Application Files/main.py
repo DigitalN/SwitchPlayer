@@ -21,7 +21,7 @@ import updater
 log = logging.getLogger("switchplayer")
 
 APP_NAME = "Switch Player"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 BUNDLE_ID = "com.digitaln.switchplayer"
 if os.environ.get("SWITCHPLAYER_DATA_DIR"):
     DATA_DIR = Path(os.environ["SWITCHPLAYER_DATA_DIR"]).expanduser()
@@ -54,13 +54,24 @@ class Native:
         bundle_id = f"org.nxnative.{game.title_id.lower()}"
         return bool(NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle_id))
 
-    def confirm(self, message, action="Quit"):
+    def confirm(self, message, action="Quit", detail=""):
         from AppKit import NSAlert, NSAlertFirstButtonReturn
+        launch.activate_app()
         alert = NSAlert.alloc().init()
         alert.setMessageText_(message)
+        alert.setInformativeText_(detail)
         alert.addButtonWithTitle_(action)
         alert.addButtonWithTitle_("Cancel")
         return alert.runModal() == NSAlertFirstButtonReturn
+
+    def alert(self, title, message):
+        """A result the player asked for, shown as Check for Updates… shows its own."""
+        from AppKit import NSAlert
+        launch.activate_app()
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(title)
+        alert.setInformativeText_(message)
+        alert.runModal()
 
     def prevent_sleep(self):
         return subprocess.Popen(["/usr/bin/caffeinate", "-i", "-w", str(os.getpid())],
@@ -141,6 +152,7 @@ class SwitchPlayerApp:
         self._title_lock = threading.Lock()
         self._freshness = {}
         self._freshness_lock = threading.Lock()
+        self._freshness_fetch_lock = threading.Lock()
         self._freshness_thread = None
         self._freshness_checked = None
         self._window = None
@@ -193,6 +205,27 @@ class SwitchPlayerApp:
     def attach_window(self, window):
         self._window = window
 
+    def _native_dialog(self, function, *args):
+        """Run an AppKit dialog on the main thread and wait for its answer: the page's API calls
+        arrive on pywebview's own threads, where AppKit refuses to make windows."""
+        if threading.current_thread() is threading.main_thread():
+            return function(*args)
+        done = threading.Event()
+        result, errors = [], []
+
+        def run():
+            try:
+                result.append(function(*args))
+            except Exception as e:
+                errors.append(e)
+            done.set()
+
+        self._dispatch(run)
+        done.wait()
+        if errors:
+            raise errors[0]
+        return result[0]
+
     def close_window(self):
         if self._window:
             self._dispatch(self._window.hide)
@@ -228,6 +261,14 @@ class SwitchPlayerApp:
         if self._window:
             self._window.evaluate_js("showSetup()")
 
+    def check_nxnative(self):
+        """Check for nxnative Updates…: compare in the background, then answer with an alert."""
+        threading.Thread(target=self._check_nxnative, name="nxnative-check", daemon=True).start()
+
+    def _check_nxnative(self):
+        title, message = self._nxnative_report()
+        self._dispatch(self._native.alert, title, message)
+
     def run(self, webview=None):
         if webview is None:
             import webview
@@ -237,7 +278,7 @@ class SwitchPlayerApp:
             webview.menu.MenuAction("Choose Keys File…", self.choose_keys),
             webview.menu.MenuAction("Build Setup…", self.show_setup),
             webview.menu.MenuAction("Check for Updates…", self._updater.check_now),
-            webview.menu.MenuAction("Check for nxnative Changes Now", lambda: self._refresh_freshness(force=True)),
+            webview.menu.MenuAction("Check for nxnative Updates…", self.check_nxnative),
         ])]
         window = webview.create_window(
             APP_NAME, html=(Path(__file__).resolve().parent / "index.html").read_text(encoding="utf-8"),
@@ -254,14 +295,19 @@ class SwitchPlayerApp:
                              own=values["nxnative_checkout"] is None)
         environment = nxnative.Environment(self._data_dir / "nxnative-python",
                                            Path(__file__).parent / "nxnative-python" / "pyproject.toml")
+        job.progress = {"preparing": "Updating nxnative"}
         copy.update()
+        if not environment.ready():
+            job.progress = {"preparing": "Installing Python packages"}
         environment.ensure()
         game = self._games.get(job.game_id)
-        if game and game.title_id:
-            migration.first_build(game.path / f"{game.title_id}_build" / "run" / "save",
-                                  self._save_root / game.title_id / "save")
-        return nxnative.build_command(copy, environment, job.path, keys_file=values["keys_file"],
-                                      options=values["build_options"].get(job.game_id, ""))
+        source = game.nxplay_save_path() if game else None
+        if source:
+            migration.first_build(source, self._save_root / game.title_id / "save")
+        command = nxnative.build_command(copy, environment, job.path, keys_file=values["keys_file"],
+                                         options=values["build_options"].get(job.game_id, ""))
+        job.progress = None  # the build script's own events take over
+        return command
 
     def _library(self):
         values = self._settings.get()
@@ -286,12 +332,13 @@ class SwitchPlayerApp:
         for game in games:
             status = self._builder.status(game.id) if self._builder else None
             current = freshness.get(game.title_id, {})
+            state = "ready" if game.app else "nxplay" if game.nxplay_build else "none"
             result.append({
                 "id": game.id,
                 "name": game.name(self._titledb.name(game.title_id)),
                 "title_id": game.title_id,
                 "art": self._art_key(self._art_path(game)),
-                "state": status["state"] if status else ("ready" if game.app else "none"),
+                "state": status["state"] if status else state,
                 "app": bool(game.app),
                 "progress": status["progress"] if status else None,
                 "error": status["error"] if status else None,
@@ -310,17 +357,60 @@ class SwitchPlayerApp:
             if not force and self._freshness_checked and time.time() - self._freshness_checked < 86400:
                 return
             self._freshness_checked = time.time()
-            self._freshness_thread = threading.Thread(target=self._fetch_freshness, name="freshness", daemon=True)
+            self._freshness_thread = threading.Thread(target=self._fetch_freshness_background, name="freshness", daemon=True)
             self._freshness_thread.start()
+
+    def _fetch_freshness_background(self):
+        try:
+            self._fetch_freshness()
+        except (nxnative.NxnativeError, ValueError):
+            log.info("Couldn't check nxnative freshness", exc_info=True)
 
     def _fetch_freshness(self):
         values = self._settings.get()
         copy = nxnative.Copy(values["nxnative_checkout"] or self._data_dir / "nxnative",
                              own=values["nxnative_checkout"] is None)
         apps = [game.app for game in self._games.values() if game.app]
-        freshness = copy.freshness(apps)
+        with self._freshness_fetch_lock:
+            freshness = copy.freshness(apps)
         with self._freshness_lock:
             self._freshness = freshness
+            self._freshness_checked = time.time()
+        return freshness
+
+    def _nxnative_report(self):
+        """The alert's title and message for Check for nxnative Updates…, in the same terms as
+        the tiles: Out of date games by name, then the others' counts of newer changes."""
+        if self._last_scan is None:
+            self._library()
+        built = sorted((game for game in self._games.values() if game.app),
+                       key=lambda game: library.sort_key(self._game_name(game)))
+        if not built:
+            return "No games built in Switch Player yet", "Your first Build will use the latest nxnative."
+        try:
+            freshness = self._fetch_freshness()
+        except (nxnative.NxnativeError, ValueError, OSError) as e:
+            log.warning("Couldn't check nxnative: %s", e)
+            return "Switch Player couldn't check nxnative", str(e)
+        out_of_date, newer = [], []
+        for game in built:
+            current = freshness.get(game.title_id, {})
+            if current.get("out_of_date") or nxnative.game_files_changed(game):
+                out_of_date.append(self._game_name(game))
+            elif current.get("newer"):
+                newer.append(f"{self._game_name(game)} ({current['newer']:,})")
+        if not out_of_date and not newer:
+            return "Your games are up to date with nxnative", "Your next Build will use the latest nxnative."
+        count = len(out_of_date) + len(newer)
+        parts = []
+        if out_of_date:
+            parts.append(f"Out of date, consider rebuilding: {', '.join(out_of_date)}.")
+        if newer:
+            parts.append(f"Newer changes that don't need a rebuild: {', '.join(newer)}.")
+        return f"nxnative has changes for {count} game{'' if count == 1 else 's'}", " ".join(parts)
+
+    def _game_name(self, game):
+        return game.name(self._titledb.name(game.title_id))
 
     def _update_titles(self, games):
         missing = [game.title_id for game in games
@@ -413,33 +503,47 @@ class SwitchPlayerApp:
         self._settings.set_build_options(game_id, text)
 
     def _import_nxplay_save(self, game_id):
+        """Import NX Play Save…: ask with both dates, then say what happened, every dialog native
+        and on the main thread. True only when the save was imported."""
         game = self._games.get(game_id)
-        if not game or not game.title_id or self._game_running(game):
+        if not game or not game.nxplay_save:
             return False
-        source = game.path / f"{game.title_id}_build" / "run" / "save"
+        name = self._game_name(game)
+        failed = "Switch Player couldn't import the save"
+        if self._game_running(game):
+            self._native_dialog(self._native.alert, f"Quit {name} first",
+                                "Switch Player can't replace a save while its game is running.")
+            return False
+        source = game.nxplay_save_path()
         destination = self._save_root / game.title_id / "save"
         try:
             details = migration.import_details(source, destination, running=False)
         except nxnative.NxnativeError as e:
             log.warning("NX Play save import: %s", e)
+            self._native_dialog(self._native.alert, failed, str(e))
             return False
 
         def date(value):
             return time.strftime("%Y-%m-%d %H:%M", time.localtime(value)) if value else "No save yet"
-        message = (f"Import the NX Play save for {game.name()}?\n\n"
-                   f"NX Play save: {date(details['nxplay_date'])}\n"
-                   f"Current save: {date(details['current_date'])}\n\n"
-                   "The current save will be backed up before it is replaced.")
-        if not self._native.confirm(message, "Import"):
+        detail = (f"NX Play save: {date(details['nxplay_date'])}\n"
+                  f"Current save: {date(details['current_date'])}\n\n"
+                  "The current save will be backed up before it is replaced.")
+        if not self._native_dialog(self._native.confirm, f"Import the NX Play save for {name}?", "Import", detail):
             return False
         if self._game_running(game):
+            self._native_dialog(self._native.alert, f"Quit {name} first",
+                                "Switch Player can't replace a save while its game is running.")
             return False
         try:
-            migration.import_save(source, destination)
-            return True
+            backup = migration.import_save(source, destination)
         except nxnative.NxnativeError as e:
             log.warning("NX Play save import: %s", e)
+            self._native_dialog(self._native.alert, failed, str(e))
             return False
+        self._native_dialog(self._native.alert, "NX Play save imported",
+                            f"Your previous save was backed up to {backup}." if backup
+                            else f"{name} had no save in Switch Player yet, so nothing needed a backup.")
+        return True
 
 
 class Api:
@@ -485,7 +589,7 @@ class Api:
         return self._app._import_nxplay_save(game_id)
 
     def setup(self):
-        return prerequisites.check(self._app._data_dir / "nxnative-python")
+        return prerequisites.check()
 
     def install_tools(self):
         try:
