@@ -1,6 +1,6 @@
 # Developing and releasing Switch Player
 
-The product decisions are in [DESIGN.md](DESIGN.md); current implementation and test boundaries are in [HANDOFF.md](HANDOFF.md).
+The product decisions are in [DESIGN.md](DESIGN.md); rules for working on the maintainer's Mac are in [CLAUDE.md](../CLAUDE.md).
 
 ## Build from source
 
@@ -34,7 +34,7 @@ Merging a pull request is **not** a release. Installed copies change only when a
 - [ ] Raise `VERSION` in `Application Files/main.py`. It must be newer than the latest release.
 - [ ] The full test suite passes.
 - [ ] `security find-identity -v -p codesigning` lists a valid Apple Development identity from team `XT4LT7MS6Y`. Updates signed by another team are refused.
-- [ ] The handoff and user-facing instructions match what is shipping.
+- [ ] DESIGN.md, the README and other user-facing instructions match what is shipping.
 
 ### Build and check the disk image
 
