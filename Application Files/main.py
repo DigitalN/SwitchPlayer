@@ -22,7 +22,7 @@ import updater
 log = logging.getLogger("switchplayer")
 
 APP_NAME = "Switch Player"
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 BUNDLE_ID = "com.digitaln.switchplayer"
 BUILD_LOG_FIRST = 512 * 1024  # how much of a long Build log the pane starts with
 BUILD_LOG_PIECE = 256 * 1024  # and reads at most at a time
@@ -166,6 +166,7 @@ class SwitchPlayerApp:
         self._settings = settings.Settings(self._data_dir / "settings.json", first_launch=first_launch)
         self._records = records.Records(self._data_dir / "build-records.json")
         self._build_files = {}  # game id → its game files when its running Build started
+        self._build_commits = {}  # game id → the nxnative commit its running Build runs with
         self._titledb = titledb.TitleDB(self._data_dir / "titledb")
         self._builder = builder
         self._games = {}
@@ -227,9 +228,10 @@ class SwitchPlayerApp:
     def _build_finished(self, job, ok):
         self._last_scan = None
         files = self._build_files.pop(job.game_id, None)
-        if ok and files is not None:
-            self._records.set_files(job.game_id, files)  # what this Build used: Out of date goes by it
+        commit = self._build_commits.pop(job.game_id, None)
         if ok:
+            # What this Build used: Out of date and the changes since the last Build go by it.
+            self._records.set_build(job.game_id, files, commit)
             game = self._games.get(job.game_id)
             with self._freshness_lock:
                 if game:
@@ -368,6 +370,7 @@ class SwitchPlayerApp:
 
         step("Downloading nxnative" if copy.needs_download else "Updating nxnative")
         copy.update(out=out, started=job.track, say=job.say)
+        self._build_commits[job.game_id] = copy.build_commit()
         if not environment.ready():
             step("Installing Python packages")
         environment.ensure(out=out, started=job.track)
@@ -451,9 +454,11 @@ class SwitchPlayerApp:
         values = self._settings.get()
         copy = nxnative.Copy(values["nxnative_checkout"] or self._data_dir / "nxnative",
                              own=values["nxnative_checkout"] is None)
-        apps = [game.app for game in self._games.values() if game.app]
+        games = [game for game in self._games.values() if game.app]
+        apps = [game.app for game in games]
+        built = {game.app.title_id: self._records.commit(game.id) for game in games}
         with self._freshness_fetch_lock:
-            freshness = copy.freshness(apps)
+            freshness = copy.freshness(apps, built)
         with self._freshness_lock:
             self._freshness = freshness
             self._freshness_offline = copy.fetch_error
@@ -462,7 +467,8 @@ class SwitchPlayerApp:
 
     def _nxnative_report(self):
         """The alert's title and message for Check for nxnative Updates…, in the same terms as
-        the tiles: Out of date games by name, then the others' counts of newer changes."""
+        the tiles: how many games are Out of date and how many have other changes since their
+        last Build. Counts, not names, so a big Library's alert stays short; the tiles say which."""
         if self._last_scan is None:
             self._library()
         built = sorted((game for game in self._games.values() if game.app),
@@ -474,27 +480,33 @@ class SwitchPlayerApp:
         except (nxnative.NxnativeError, ValueError, OSError) as e:
             log.warning("Couldn't check nxnative: %s", e)
             return "Switch Player couldn't check nxnative", str(e)
-        out_of_date, newer = [], []
+        out_of_date = changed = 0
         for game in built:
             current = freshness.get(game.title_id, {})
             if current.get("out_of_date") or self._files_changed(game):
-                out_of_date.append(self._game_name(game))
+                out_of_date += 1
             elif current.get("newer"):
-                newer.append(f"{self._game_name(game)} ({current['newer']:,})")
+                changed += 1
         with self._freshness_lock:
             offline = self._freshness_offline
         # Offline, the answer is only as new as the last fetch, and says so.
         stale = f"Switch Player couldn't reach GitHub ({offline}), so this compares with the nxnative it last fetched."
-        if not out_of_date and not newer:
+        if not out_of_date and not changed:
             if offline:
                 return "Switch Player couldn't reach GitHub", f"Compared with the nxnative it last fetched, your games are up to date. ({offline})"
             return "Your games are up to date with nxnative", "Your next Build will use the latest nxnative."
-        count = len(out_of_date) + len(newer)
+        count = out_of_date + changed
         parts = []
         if out_of_date:
-            parts.append(f"Out of date, consider rebuilding: {', '.join(out_of_date)}.")
-        if newer:
-            parts.append(f"Newer changes that don't need a rebuild: {', '.join(newer)}.")
+            parts.append(f"{out_of_date:,} {'is' if out_of_date == 1 else 'are'} out of date, "
+                         f"consider rebuilding {'it' if out_of_date == 1 else 'them'}.")
+            if changed:
+                parts.append(f"{changed:,} more {'has' if changed == 1 else 'have'} changes since "
+                             f"{'its' if changed == 1 else 'their'} last Build.")
+        elif changed == 1:
+            parts.append("It isn't out of date. It has changes since its last Build.")
+        else:
+            parts.append("None are out of date. Each has changes since its last Build.")
         if offline:
             parts.append(stale)
         return f"nxnative has changes for {count} game{'' if count == 1 else 's'}", " ".join(parts)

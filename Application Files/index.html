@@ -423,8 +423,10 @@ function statusOf(g) {
         detailTitle: g.error || '',
       };
     case 'ready':
-      if (g.out_of_date) return { text: 'Ready', act: 'build', detail: 'Your version is out of date, consider rebuilding', detailCls: 'warn' };
-      if (g.newer > 0) return { text: 'Ready', detail: `${g.newer.toLocaleString()} newer nxnative change${g.newer === 1 ? '' : 's'}` };
+      // A Game app gets Rebuild for any nxnative change since its last Build: yellow when it was
+      // made for this game, grey otherwise (DESIGN.md, Out of date).
+      if (g.out_of_date) return { text: 'Ready', act: 'rebuild', detail: 'Your version is out of date, consider rebuilding', detailCls: 'warn' };
+      if (g.newer > 0) return { text: 'Ready', act: 'rebuild', detail: 'nxnative has changes since last Build' };
       return { text: 'Ready' };
     case 'nxplay':
       return { text: 'Built in NX Play', act: 'build', detail: "Build once to play it here. It reuses NX Play's files and brings your save." };
@@ -474,9 +476,9 @@ function updateTile(t, g) {
   put(t.status, 'title', s.text);
   put(t.act, 'hidden', !s.act);
   if (s.act) {
-    put(t.act, 'text', s.act === 'stop' ? 'Stop' : 'Build');
+    put(t.act, 'text', { stop: 'Stop', build: 'Build', rebuild: 'Rebuild' }[s.act]);
     put(t.act, 'class', `act ${s.act}`);
-    t.act.dataset.act = s.act;
+    t.act.dataset.act = s.act === 'rebuild' ? 'build' : s.act;
   }
   put(t.detail, 'class', `detail ${s.detailCls || ''}`);
   put(t.detail, 'html', s.detail || '');

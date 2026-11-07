@@ -51,7 +51,7 @@ Click **⋯** or right-click a game for its **Settings…** window, **Build Opti
 
 ## Staying up to date
 
-**nxnative** changes often. Switch Player compares your built games with the latest nxnative each time it opens and once a day. When a change affects a game, its tile says *Your version is out of date, consider rebuilding*; other changes show as a count. **Switch Player → Check for nxnative Updates…** checks now and tells you what it found. Every Build uses the latest nxnative.
+**nxnative** changes often. Switch Player compares your built games with the latest nxnative each time it opens and once a day. When a change was made for a game, its tile says *Your version is out of date, consider rebuilding*; other changes say *nxnative has changes since last Build*. Either way the game stays ready to play, with a **Rebuild** button in case you want the changes first. **Switch Player → Check for nxnative Updates…** checks now and tells you what it found. Every Build uses the latest nxnative.
 
 **Switch Player** updates itself from this repository's releases, checking each time it opens and once a day, and shows each step at the bottom of the window. **Switch Player → Check for Updates…** checks now.
 
