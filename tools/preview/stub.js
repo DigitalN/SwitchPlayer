@@ -21,6 +21,9 @@
 //            Advanced settings open) settings-running (the game is running) settings-fixed (env.txt
 //            fixes two settings) settings-scale (a Render scale with its picture sizes) settings-none
 //            (no settings list) settings-unsupported (a list it can't draw) settings-save-fails
+//   play:    starting (Rhythm Heaven starting, held) playing (Jamboree playing) didnt-start (Rhythm
+//            Heaven quit before its window showed) play-fails (every Play ends as Didn't start)
+//            Play itself shows Starting… for 3 s, then Playing; set a game's play to null to quit it.
 //   theme:   dark light
 // Change window.__state while it runs to try anything else; the next poll picks it up.
 // window.__state.calls is every API call the page made. Page errors that the app would log
@@ -29,7 +32,7 @@
   const app = window.__app;
   const fresh = g => ({
     id: g.id, name: g.name, title_id: g.title_id, art: g.art_data ? `${g.title_id}:1` : null,
-    state: g.nxplay_build ? 'nxplay' : 'none', app: false, progress: null, error: null, out_of_date: false, newer: 0,
+    state: g.nxplay_build ? 'nxplay' : 'none', app: false, play: null, progress: null, error: null, out_of_date: false, newer: 0,
     log: false, build_log: false, nxplay_save: g.nxplay_save, options: '',
   });
   const state = window.__state = {
@@ -51,6 +54,7 @@
     fixed: {},  // env → value: what an env.txt sets
     running: false,
     save_fails: false,
+    play_fails: false,  // Play ends as Didn't start
     open_settings: null,  // a game id: its Settings panel opens at launch
   };
   const game = id => state.games.find(g => g.id === id);
@@ -242,6 +246,19 @@
     'settings-none': () => { state.settings_status = 'none'; },
     'settings-unsupported': () => { state.settings_status = 'unsupported'; },
     'settings-save-fails': () => { state.save_fails = true; },
+    starting: () => {
+      state.games.forEach(g => Object.assign(g, { state: 'ready', app: true, log: true }));
+      named('Rhythm').play = 'starting';
+    },
+    playing: () => {
+      state.games.forEach(g => Object.assign(g, { state: 'ready', app: true, log: true }));
+      named('Jamboree').play = 'playing';
+    },
+    'didnt-start': () => {
+      state.games.forEach(g => Object.assign(g, { state: 'ready', app: true, log: true }));
+      Object.assign(named('Rhythm'), { play: 'didnt_start', newer: 3 });
+    },
+    'play-fails': () => { state.play_fails = true; },
     'copy-fails': () => { state.copy_fails = true; },
     building: () => {
       Object.assign(at(0), { state: 'building' }); newLog(at(0)); startStage(at(0), 9, 0.42); at(0).progress.at = 0.42 * 8; at(0).progress.eta = 280;
@@ -361,7 +378,16 @@
     set_ui_state: values => { Object.assign(state.ui, values); },
     art: id => state.art[id] || null,
     choose_library: () => { state.folder_name = app.library.name; state.games = app.games.map(fresh); },
-    play: id => console.log(`Preview: would open ${game(id).name}.app with --no-launcher`),
+    play: id => {
+      const g = game(id);
+      if (g.play === 'starting' || g.play === 'playing') {
+        console.log(`Preview: ${g.name} is ${g.play}: would bring it to the front, not start it again`);
+        return;
+      }
+      console.log(`Preview: would open ${g.name}.app with --no-launcher`);
+      g.play = 'starting';
+      setTimeout(() => { if (g.play === 'starting') g.play = state.play_fails ? 'didnt_start' : 'playing'; }, 3000);
+    },
     game_settings: id => {
       const g = game(id);
       if (!g || !g.app) return null;

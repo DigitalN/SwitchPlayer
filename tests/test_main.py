@@ -20,6 +20,14 @@ def no_background_downloads(monkeypatch):
     monkeypatch.setattr(main.SwitchPlayerApp, "_refresh_freshness", lambda self: None)
 
 
+@pytest.fixture(autouse=True)
+def no_real_games_running(monkeypatch):
+    """Never the player's own running games, and no watch thread: tests drive a Play's states
+    through the page's polls (api.library()) with a clock of their own."""
+    monkeypatch.setattr(main.Native, "game_processes", lambda self, game: set())
+    monkeypatch.setattr(main.SwitchPlayerApp, "_start_play_watch", lambda self: None)
+
+
 def test_library_waits_for_a_folder_choice(tmp_path):
     api = main.Api(main.SwitchPlayerApp(data_dir=tmp_path, first_launch=dict))
 
@@ -44,6 +52,7 @@ def test_library_returns_the_page_contract_for_an_unbuilt_game(tmp_path):
             "art": None,
             "state": "none",
             "app": False,
+            "play": None,
             "progress": None,
             "error": None,
             "out_of_date": False,
@@ -173,6 +182,18 @@ class FakeNative:
         self.answer = True
         self.prefs = {}  # bundle ID → {key: value}: Game apps' saved choices
         self.running = False
+        self.processes = set()  # the Game app's processes, as game_processes finds them
+        self.windows = set()  # those of them with a window on screen
+
+    def game_processes(self, game):
+        return set(self.processes)
+
+    def window_shown(self, pids):
+        return bool(self.windows & pids)
+
+    def bring_to_front(self, pids):
+        self.calls.append(("front", set(pids)))
+        return True
 
     def read_choices(self, bundle_id, keys):
         stored = self.prefs.get(bundle_id, {})
@@ -456,6 +477,131 @@ def test_native_forgets_only_the_settings_window_choice(tmp_path):
     assert Foundation.CFPreferencesCopyAppValue(main.SETTINGS_WINDOW_CHOICE, domain) is None
     assert Foundation.CFPreferencesCopyAppValue("launcher.DM_OPMODE", domain) == "1"
     assert plistlib.loads((tmp_path / "org.nxnative.test.plist").read_bytes()) == {"launcher.DM_OPMODE": "1"}
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def play_api(tmp_path):
+    native, clock = FakeNative(), Clock()
+    folder = settings_game(tmp_path)
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=lambda: {"library_folder": str(folder.parent)},
+                               native=native, dispatch=lambda function, *args: function(*args), clock=clock,
+                               save_root=tmp_path / "data" / "nxnative-saves")
+    api = main.Api(app)
+    api.library()
+    return api, native, clock, folder / "Rhythm Heaven Groove.app"
+
+
+def play_state(api):
+    return api.library()["games"][0]["play"]
+
+
+def test_play_shows_starting_until_the_game_window_is_on_screen_then_playing_until_it_quits(tmp_path):
+    api, native, clock, game_app = play_api(tmp_path)
+    assert play_state(api) is None
+
+    api.play("Rhythm Heaven")
+    assert native.calls == [("open", game_app, True)]
+    assert play_state(api) == "starting"  # open hasn't brought the Game app up yet
+    native.processes = {501}
+    clock.now += 20
+    assert play_state(api) == "starting"  # running, loading, no window yet: however long it takes
+    native.processes = {501, 502}  # its launcher's host
+    native.windows = {502}
+    assert play_state(api) == "playing"
+    native.windows = set()  # its fullscreen window is in another Space now
+    assert play_state(api) == "playing"
+    native.processes = set()
+    assert play_state(api) is None  # it quit: Ready again
+
+
+def test_a_game_that_quits_before_its_window_shows_didnt_start_until_the_next_play(tmp_path):
+    api, native, clock, game_app = play_api(tmp_path)
+
+    api.play("Rhythm Heaven")
+    native.processes = {501}
+    assert play_state(api) == "starting"
+    native.processes = set()
+    assert play_state(api) == "didnt_start"
+    assert play_state(api) == "didnt_start"
+
+    api.play("Rhythm Heaven")
+    assert play_state(api) == "starting"
+    assert native.calls == [("open", game_app, True), ("open", game_app, True)]
+
+
+def test_a_game_app_that_never_appears_didnt_start(tmp_path):
+    api, native, clock, game_app = play_api(tmp_path)
+
+    api.play("Rhythm Heaven")
+    clock.now += main.PLAY_APPEARS - 1
+    assert play_state(api) == "starting"
+    clock.now += 2
+    assert play_state(api) == "didnt_start"
+
+
+def test_play_never_starts_a_game_twice_and_brings_a_running_one_to_the_front(tmp_path):
+    api, native, clock, game_app = play_api(tmp_path)
+
+    api.play("Rhythm Heaven")
+    api.play("Rhythm Heaven")  # still starting: nothing to bring forward, and no second start
+    native.processes, native.windows = {501, 502}, {502}
+    assert play_state(api) == "playing"
+    api.play("Rhythm Heaven")
+
+    assert native.calls == [("open", game_app, True), ("front", {501, 502})]
+
+
+def test_a_game_started_from_finder_shows_but_never_as_didnt_start(tmp_path):
+    api, native, clock, game_app = play_api(tmp_path)
+    native.processes = {501}
+
+    assert play_state(api) == "starting"
+    native.processes = set()
+    assert play_state(api) is None  # it quit before a window: Ready, not Didn't start
+    api.play("Rhythm Heaven")  # and Play starts it as usual
+    assert native.calls == [("open", game_app, True)]
+
+
+def test_the_watch_thread_follows_a_play_without_the_page(tmp_path, monkeypatch):
+    """The page stops polling while the window is closed or behind a fullscreen game."""
+    monkeypatch.undo()
+    monkeypatch.setattr(main.titledb.TitleDB, "update", lambda self, tids: set())
+    monkeypatch.setattr(main.SwitchPlayerApp, "_refresh_freshness", lambda self: None)
+    monkeypatch.setattr(main, "PLAY_WATCH", 0.01)
+    native, clock = FakeNative(), Clock()
+    folder = settings_game(tmp_path)
+    app = main.SwitchPlayerApp(data_dir=tmp_path / "data", first_launch=lambda: {"library_folder": str(folder.parent)},
+                               native=native, dispatch=lambda function, *args: function(*args), clock=clock)
+    api = main.Api(app)
+    api.library()
+
+    api.play("Rhythm Heaven")
+    native.processes, native.windows = {501}, {501}
+    deadline = time.monotonic() + 5
+    while not (app._plays.get("Rhythm Heaven") or {}).get("window") and time.monotonic() < deadline:
+        time.sleep(0.01)
+    native.processes, native.windows = set(), set()  # it quit, all without a poll from the page
+    while app._play_thread is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert app._play_thread is None  # the thread ends with the last game
+    assert play_state(api) is None  # Ready, never Didn't start
+
+
+def test_child_pids_lists_the_processes_a_process_started():
+    child = __import__("subprocess").Popen(["/bin/sleep", "5"])
+    try:
+        assert child.pid in main.child_pids(__import__("os").getpid())
+    finally:
+        child.kill()
+        child.wait()
 
 
 def test_build_prepares_the_isolated_nxnative_script_and_environment(tmp_path, monkeypatch):

@@ -454,6 +454,16 @@ function fmtLeft(secs) {
 // What a tile shows below the name: a one-line status, the button beside it (Build,
 // Stop or none), a detail line, and the progress bar's fraction (null hides it).
 function statusOf(g) {
+  // After Play: Starting… until the game's window is on screen (nothing to count, so the bar moves
+  // back and forth), then Playing until it quits. A Build's status wins over these.
+  if (g.play && g.state !== 'building' && g.state !== 'waiting') {
+    if (g.play === 'starting') return { text: 'Starting…', cls: 'building', bar: 0, busy: true };
+    if (g.play === 'playing') return { text: 'Playing', cls: 'building' };
+    if (g.play === 'didnt_start') return {
+      text: "Didn't start", cls: 'failed', act: g.out_of_date || g.newer > 0 ? 'rebuild' : undefined,
+      detail: g.log ? '<button class="link" data-act="show-log">Show Log</button>' : '',
+    };
+  }
   switch (g.state) {
     case 'waiting':
       return { text: 'Waiting', act: 'stop' };
@@ -687,6 +697,7 @@ grid.addEventListener('click', e => {
     case 'build': showPane(); call('build', id); break;
     case 'stop': call('stop', id); break;
     case 'build-log': showBuildLog(id); break;
+    case 'show-log': call('show_log', id); break;
     case 'more': {
       if (menuFor === t) { closeMenu(); break; }
       const r = b.getBoundingClientRect();

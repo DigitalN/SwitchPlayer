@@ -24,7 +24,7 @@ import updater
 log = logging.getLogger("switchplayer")
 
 APP_NAME = "Switch Player"
-VERSION = "0.1.8"
+VERSION = "0.1.9"
 BUNDLE_ID = "com.digitaln.switchplayer"
 BUILD_LOG_FIRST = 512 * 1024  # how much of a long Build log the pane starts with
 BUILD_LOG_PIECE = 256 * 1024  # and reads at most at a time
@@ -32,6 +32,11 @@ BUILD_LOG_PIECE = 256 * 1024  # and reads at most at a time
 # front-end contract doesn't name. Only for a settings list the Settings panel can't draw: opening
 # the game's own Settings window removes it first, under ADR 0001's second exception.
 SETTINGS_WINDOW_CHOICE = "window.show"
+# After Play, how long the Game app has to appear before its start counts as Didn't start, and how
+# often a started game is looked at: its processes (the Game app, and the host its launcher runs as
+# a child, docs/frontends.md) and whether any of them has a window on screen yet.
+PLAY_APPEARS = 15
+PLAY_WATCH = 0.5
 if os.environ.get("SWITCHPLAYER_DATA_DIR"):
     DATA_DIR = Path(os.environ["SWITCHPLAYER_DATA_DIR"]).expanduser()
     LOG_DIR = DATA_DIR / "Logs"
@@ -43,6 +48,16 @@ else:
 def dispatch(function, *args):
     from PyObjCTools import AppHelper
     AppHelper.callAfter(function, *args)
+
+
+def child_pids(pid):
+    """The processes `pid` started (libproc's proc_listchildpids)."""
+    import ctypes
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+    libproc.proc_listchildpids.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+    buffer = (ctypes.c_int * 256)()
+    count = libproc.proc_listchildpids(pid, buffer, ctypes.sizeof(buffer))
+    return [child for child in buffer[:max(0, min(count, 256))] if child > 0]
 
 
 def app_bundle_id(game):
@@ -75,6 +90,49 @@ class Native:
         for key, value in changes.items():
             CFPreferencesSetAppValue(key, value, bundle_id)
         return bool(CFPreferencesAppSynchronize(bundle_id))
+
+    def game_processes(self, game):
+        """The running Game app's processes: those macOS knows by its bundle ID, and every
+        process they started (its launcher runs the game's host as a child)."""
+        from AppKit import NSRunningApplication
+        apps = NSRunningApplication.runningApplicationsWithBundleIdentifier_(app_bundle_id(game))
+        found = {int(app.processIdentifier()) for app in apps if not app.isTerminated()}
+        todo = list(found)
+        while todo:
+            for child in child_pids(todo.pop()):
+                if child not in found:
+                    found.add(child)
+                    todo.append(child)
+        return found
+
+    @staticmethod
+    def _windows(pids, on_screen):
+        """The owners of the ordinary windows (layer 0, bigger than a dialog's corner) of `pids`.
+        Only the owner and size are read, which needs no Screen Recording permission."""
+        import Quartz
+        options = Quartz.kCGWindowListExcludeDesktopElements
+        options |= Quartz.kCGWindowListOptionOnScreenOnly if on_screen else Quartz.kCGWindowListOptionAll
+        owners = []
+        for window in Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID) or []:
+            bounds = window.get(Quartz.kCGWindowBounds) or {}
+            if (int(window.get(Quartz.kCGWindowOwnerPID, -1)) in pids and window.get(Quartz.kCGWindowLayer) == 0
+                    and bounds.get("Width", 0) >= 200 and bounds.get("Height", 0) >= 150):
+                owners.append(int(window[Quartz.kCGWindowOwnerPID]))
+        return owners
+
+    def window_shown(self, pids):
+        """Whether any of `pids` has a window on screen."""
+        return bool(self._windows(pids, on_screen=True))
+
+    def bring_to_front(self, pids):
+        """Activate the game: the process with its window, in whatever Space that is. On the
+        main thread."""
+        from AppKit import NSApplicationActivateAllWindows, NSRunningApplication
+        for pid in dict.fromkeys(self._windows(pids, on_screen=False)):
+            app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+            if app is not None and app.activateWithOptions_(NSApplicationActivateAllWindows):
+                return True
+        return False
 
     def forget_settings_window_choice(self, bundle_id):
         """Remove a Game app's saved "Show this window at launch", so its launcher falls back to
@@ -192,7 +250,8 @@ class Native:
 
 class SwitchPlayerApp:
     def __init__(self, data_dir=None, first_launch=settings.nxplay_preferences, builder=None,
-                 native=None, dispatch=dispatch, save_root=None, game_running=None):
+                 native=None, dispatch=dispatch, save_root=None, game_running=None,
+                 clock=time.monotonic, watch_plays=True):
         self._native = native or Native()
         self._dispatch = dispatch
         self._data_dir = Path(data_dir) if data_dir is not None else DATA_DIR
@@ -218,6 +277,13 @@ class SwitchPlayerApp:
         self._freshness_thread = None
         self._freshness_checked = None
         self._freshness_offline = None  # why the last check couldn't fetch nxnative, when it couldn't
+        # Games started or running: game id → {since, pids, window, ours} (see _update_play)
+        self._clock = clock
+        self._plays = {}
+        self._didnt_start = set()  # games whose last Play ended before their window showed
+        self._plays_lock = threading.Lock()
+        self._play_thread = None
+        self._watch_plays = watch_plays
         self._window = None
         self._caffeinate = None
         self._updater = updater.Updater(launch.bundle_path(), VERSION, self._data_dir,
@@ -487,6 +553,7 @@ class SwitchPlayerApp:
                 "art": self._art_key(self._art_path(game)),
                 "state": status["state"] if status else state,
                 "app": bool(game.app),
+                "play": self._update_play(game) if game.app else None,
                 "progress": status["progress"] if status else None,
                 "error": status["error"] if status else None,
                 "out_of_date": current.get("out_of_date", False) or self._files_changed(game),
@@ -631,9 +698,92 @@ class SwitchPlayerApp:
         return self._data_dir / "nxnative-logs" / f"{game.title_id}.log"
 
     def _play(self, game_id):
+        """Play: start the Game app straight into its game, which shows as Starting… until its
+        window is on screen. A game already starting or running is never started again: one
+        with its window up comes to the front."""
         game = self._games.get(game_id)
-        if game and game.app:
-            self._dispatch(self._native.open_app, game.app.path, True)
+        if not game or not game.app:
+            return
+        if self._update_play(game) in ("starting", "playing"):
+            with self._plays_lock:
+                play = self._plays.get(game_id)
+                pids = set(play["pids"]) if play and play["window"] else None
+            if pids:
+                self._dispatch(self._native.bring_to_front, pids)
+            return
+        with self._plays_lock:
+            self._didnt_start.discard(game_id)
+            self._plays[game_id] = {"since": self._clock(), "pids": set(), "window": False, "ours": True}
+        self._start_play_watch()
+        self._dispatch(self._native.open_app, game.app.path, True)
+
+    def _update_play(self, game):
+        """Where a game's Play stands, from macOS: "starting" (its Game app is running, or Play
+        was just pressed, with no window on screen yet), "playing" (a window has shown, until
+        it quits), "didnt_start" (the last Play ended before a window showed), else None.
+        A start from Finder or the Dock shows the same way, but never as Didn't start."""
+        try:
+            pids = self._native.game_processes(game)
+        except Exception as e:
+            log.warning("Couldn't look for %s's processes: %s", game.id, e)
+            pids = set()
+        with self._plays_lock:
+            play = self._plays.get(game.id)
+            seen = bool(play and play["window"])
+        shown = seen
+        if pids and not seen:
+            try:
+                shown = bool(self._native.window_shown(pids))
+            except Exception as e:
+                log.warning("Couldn't look for %s's window: %s", game.id, e)
+        now = self._clock()
+        started = False
+        with self._plays_lock:
+            play = self._plays.get(game.id)
+            if pids:
+                if play is None:
+                    play = self._plays[game.id] = {"since": now, "pids": set(), "window": False, "ours": False}
+                    started = True
+                play["pids"] = pids
+                play["window"] = play["window"] or shown  # once shown, Playing until it quits, in any Space
+                state = "playing" if play["window"] else "starting"
+            elif play and play["ours"] and not play["pids"] and now - play["since"] < PLAY_APPEARS:
+                state = "starting"  # Play was pressed; macOS hasn't started the Game app yet
+            else:
+                if play:
+                    del self._plays[game.id]
+                    if play["ours"] and not play["window"]:
+                        self._didnt_start.add(game.id)
+                state = "didnt_start" if game.id in self._didnt_start else None
+        if started:
+            self._start_play_watch()
+        return state
+
+    def _start_play_watch(self):
+        """Look at started games twice a second, whether or not the page is polling (it stops
+        while the window is closed, or hidden behind a fullscreen game), so a game whose window
+        showed is never taken for one that didn't start."""
+        with self._plays_lock:
+            if not self._watch_plays or self._play_thread is not None:
+                return
+            self._play_thread = threading.Thread(target=self._play_watch, name="play-watch", daemon=True)
+            self._play_thread.start()
+
+    def _play_watch(self):
+        while True:
+            with self._plays_lock:
+                if not self._plays:
+                    self._play_thread = None
+                    return
+                ids = list(self._plays)
+            for game_id in ids:
+                game = self._games.get(game_id)
+                if game and game.app:
+                    self._update_play(game)
+                else:
+                    with self._plays_lock:
+                        self._plays.pop(game_id, None)
+            time.sleep(PLAY_WATCH)
 
     def _game_settings(self, game_id):
         """The Settings panel's contents: {name, status, running, rows} (game_settings.rows),
