@@ -12,7 +12,7 @@ Agreed with the maintainer in a grilling session on 2026-11-06; DESIGN.md has th
 - **Import NX Play Save…** crashed: `NSAlert` was made on pywebview's API thread. Its dialogs now go through `_native_dialog()` onto the main thread, and the result is a native alert. The menu item appears only when an NX Play save exists.
 - **Check for nxnative Updates…** (renamed) runs in the background and answers with a native alert, like Check for Updates…. Before, it refreshed silently, and with no Game apps there was nothing to show.
 - **Build Setup** no longer lists Python packages. The tile shows Preparing Build · Updating nxnative, or · Installing Python packages only while they install.
-- **App icon**: `Application Files/SwitchPlayer.svg` → `scripts/make_icon.py` → `SwitchPlayer.icns`. Three concepts are in `docs/images/icon-concepts/`; the maintainer picks one before the PR.
+- **App icon**: `Application Files/SwitchPlayer.svg` → `scripts/make_icon.py` → `SwitchPlayer.icns`. The maintainer chose the game card with a play button (of three concepts: game card, controller, Library grid). It's original: no Nintendo marks or Joy-Con colours.
 - **README** with screenshots from the preview's `readme` scenario.
 - Next: PR, then release 0.1.1, then rename the local checkout folder from `NXPlayer` to `SwitchPlayer` (the maintainer reopens Claude there).
 
