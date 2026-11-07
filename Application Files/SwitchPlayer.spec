@@ -66,6 +66,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='Switch Player.app',
+    icon=os.path.join(SPECPATH, 'SwitchPlayer.icns'),  # from SwitchPlayer.svg: scripts/make_icon.py
     bundle_identifier='com.digitaln.switchplayer',
     info_plist={
         'CFBundleName': 'Switch Player',
