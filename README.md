@@ -35,7 +35,7 @@ Switch Player doesn't include any games or keys.
 
 Closing the window doesn't stop a Build. Quitting Switch Player asks first.
 
-To follow a Build as it goes, open the **Build Log** at the top right of the window: it follows whichever game is building, with a live line for the stage it's on. A big game's first Build can take hours, most of it translating shaders; a Switch 2 game also needs tens of gigabytes free for its build folder.
+To follow a Build as it goes, open the **Build Log** at the top right of the window: it follows whichever game is building, with a live line for the stage it's on. **Copy Log** copies the whole log, to paste into an issue. A big game's first Build can take hours, most of it translating shaders; a Switch 2 game also needs tens of gigabytes free for its build folder.
 
 ## Coming from NX Play
 
