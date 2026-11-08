@@ -12,6 +12,7 @@ a = Analysis(
         ('index.html', '.'),
         ('Brewfile', '.'),
         ('nxnative-python/pyproject.toml', 'nxnative-python'),
+        ('../LICENSE', '.'),
         ('../THIRD-PARTY-NOTICES', '.'),
     ],
     hiddenimports=[
@@ -75,6 +76,9 @@ app = BUNDLE(
         'CFBundleShortVersionString': VERSION,
         'LSMinimumSystemVersion': '26.6',
         'NSHighResolutionCapable': True,
-        'NSHumanReadableCopyright': 'See THIRD-PARTY-NOTICES.',
+        # The About box: GPL's notice for an interactive program (LICENSE, section 5d)
+        'NSHumanReadableCopyright': 'Copyright © 2026 DigitalN.\n'
+                                    'Free software under the GNU GPL, version 3 or later, with no warranty. '
+                                    'See github.com/DigitalN/SwitchPlayer for the license and source.',
     },
 )

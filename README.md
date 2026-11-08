@@ -62,3 +62,9 @@ By default Switch Player keeps its own copy of nxnative and moves it to the late
 ## Development
 
 See [the design](docs/DESIGN.md), [development and release instructions](docs/DEVELOPMENT.md), and [project terminology](GLOSSARY.md).
+
+## License
+
+Switch Player is free software: you can redistribute it and change it under the terms of the [GNU General Public License](LICENSE), version 3 or later. It comes with no warranty. [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) lists the code it adapts and the software the app ships, each under its own license.
+
+The game names and artwork in the screenshots belong to their owners. Switch Player isn't affiliated with or endorsed by Nintendo. Nintendo Switch is a trademark of Nintendo.
