@@ -36,6 +36,18 @@ a = Analysis(
         'webview.platforms.mshtml',
         'webview.platforms.qt',
         'webview.platforms.winforms',
+        # Optional imports that PyInstaller follows from the build Python, though nothing runs them.
+        # pywebview imports cryptography only to make a certificate for start(ssl=True), which
+        # Switch Player never passes; cryptography tries bcrypt for encrypted SSH keys; both bring
+        # cffi's _cffi_backend. bottle, pywebview's local server, imports jinja2 (which needs
+        # MarkupSafe) only for Jinja2 templates, which pywebview doesn't use. Python's ssl module
+        # needs none of them.
+        'cryptography',
+        'bcrypt',
+        'cffi',
+        '_cffi_backend',
+        'jinja2',
+        'markupsafe',
     ],
     noarchive=False,
 )
