@@ -3,5 +3,12 @@ pywebview==6.1
 pyobjc-core==12.1
 pyobjc-framework-Cocoa==12.1
 pyobjc-framework-Quartz==12.1
+pyobjc-framework-Security==12.1
+pyobjc-framework-UniformTypeIdentifiers==12.1
 pyobjc-framework-WebKit==12.1
 pyinstaller==6.19.0
+
+# pywebview's other dependencies, which the app ships
+bottle==0.13.4
+proxy_tools==0.1.0
+typing_extensions==4.15.0
