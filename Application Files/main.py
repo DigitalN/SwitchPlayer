@@ -24,7 +24,7 @@ import updater
 log = logging.getLogger("switchplayer")
 
 APP_NAME = "Switch Player"
-VERSION = "0.1.9"
+VERSION = "0.1.10"
 BUNDLE_ID = "com.digitaln.switchplayer"
 BUILD_LOG_FIRST = 512 * 1024  # how much of a long Build log the pane starts with
 BUILD_LOG_PIECE = 256 * 1024  # and reads at most at a time

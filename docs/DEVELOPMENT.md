@@ -71,7 +71,7 @@ file "$M/Switch Player.app/Contents/MacOS/Switch Player"
 hdiutil detach "$M"
 ```
 
-The bundle identifier must be `com.digitaln.switchplayer`, the architecture arm64, and the minimum macOS version 26.6. The page, Brewfile, Python package list and third-party notices must be in `Contents/Resources`.
+The bundle identifier must be `com.digitaln.switchplayer`, the architecture arm64, and the minimum macOS version 26.6. The page, Brewfile, Python package list, `LICENSE` and `THIRD-PARTY-NOTICES` must be in `Contents/Resources`. `THIRD-PARTY-NOTICES` must cover every package in `Contents/Frameworks`, at the version shipped.
 
 ### Test updating, if the updater, packaging or signing changed
 
