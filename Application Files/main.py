@@ -3,6 +3,7 @@
 import base64
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -24,7 +25,7 @@ import updater
 log = logging.getLogger("switchplayer")
 
 APP_NAME = "Switch Player"
-VERSION = "0.1.10"
+VERSION = "0.1.11"
 BUNDLE_ID = "com.digitaln.switchplayer"
 BUILD_LOG_FIRST = 512 * 1024  # how much of a long Build log the pane starts with
 BUILD_LOG_PIECE = 256 * 1024  # and reads at most at a time
@@ -260,7 +261,13 @@ class SwitchPlayerApp:
         self._game_running = game_running or self._native.game_running
         self._settings = settings.Settings(self._data_dir / "settings.json", first_launch=first_launch)
         self._records = records.Records(self._data_dir / "build-records.json")
-        self._build_icons = self._data_dir / "Icons" / "Builds"  # each game's icon from its Build's game event
+        # Art and Game icons (_art_path): the Game apps' icons as JPEGs (Icons/<game id>-<mtime_ns>.jpg,
+        # the newest per Game), and each title's Game icon (Icons/Games/<title ID>.jpg), kept for good.
+        self._icons = self._data_dir / "Icons"
+        self._game_icons = self._icons / "Games"
+        self._icons_tidied = set()  # game ids whose icons were seeded and tidied this launch
+        self._icons_failed = set()  # Game app icons that wouldn't convert this launch, not tried at every scan
+        self._build_icons = {}  # game id → (its running Build's options name --icon, the stand-in icons it was given)
         self._build_files = {}  # game id → its game files when its running Build started
         self._build_commits = {}  # game id → the nxnative commit its running Build runs with
         self._titledb = titledb.TitleDB(self._data_dir / "titledb")
@@ -332,6 +339,7 @@ class SwitchPlayerApp:
         self._last_scan = None
         files = self._build_files.pop(job.game_id, None)
         commit = self._build_commits.pop(job.game_id, None)
+        self._build_icons.pop(job.game_id, None)
         game = self._games.get(job.game_id)
         name = self._game_name(game) if game else job.name  # as the tile says it, nxnative's name once it gave one
         if ok:
@@ -347,28 +355,60 @@ class SwitchPlayerApp:
 
     def _build_named(self, job, event):
         """The build script's `game` event: the game's own name and icon, about a minute into its
-        Build. Both are kept at once (the icon copied, as the build folder it's in may be cleared
-        when the Build ends), so the tile shows them from now on, even if this Build stops or fails,
-        until the Game app exists to speak for itself."""
+        Build. The name is kept at once, so the tile shows it from now on, even if this Build stops
+        or fails, until the Game app exists to speak for itself. An icon that is the game's own
+        (not the stand-in Switch Player gave with `--fallback-icon`, nor the player's `--icon`) is
+        copied as the title's Game icon, as the build folder it's in may be cleared when the Build
+        ends. An event without one leaves the Game icon kept from before: a `.nup` may carry none."""
         tid, name, icon = event.get("title_id"), event.get("name"), event.get("icon")
         if not library.is_title_id(tid) or not isinstance(name, str) or not name.strip():
             log.warning("Ignored a game event without a title ID and a name: %r", event)
             return
         tid = tid.upper()
-        output = self._build_icons / f"{builds.safe_name(job.game_id)}.jpg"
-        kept = None
+        kept = self._keep_game_icon(tid, Path(icon)) if self._own_icon(job.game_id, icon) else None
+        self._records.set_game(job.game_id, tid, name.strip(), kept and kept.name)
+
+    def _own_icon(self, game_id, icon):
+        """Whether a `game` event's icon is the game's own, the icon.jpg nxnative extracted, rather
+        than one its Build was given: the player's `--icon`, which nxnative always names when it's
+        there, or a `--fallback-icon` (nxnative names it by its resolved path)."""
+        if not isinstance(icon, str) or not icon:
+            return False
+        player_icon, stand_ins = self._build_icons.get(game_id, (False, set()))
+        if player_icon:
+            return False
         try:
-            if isinstance(icon, str) and Path(icon).is_file():
-                output.parent.mkdir(parents=True, exist_ok=True)
-                part = output.with_name(output.name + ".partial")
-                shutil.copyfile(icon, part)  # a new modified time, so the page asks for the new art
-                os.replace(part, output)
-                kept = output.name
-            else:
-                output.unlink(missing_ok=True)  # another title's, or a game without an icon now
+            path = Path(icon).resolve()
+            return path.is_file() and path not in stand_ins
+        except OSError:
+            return False
+
+    def _game_icon(self, tid):
+        """The Game icon Switch Player keeps for a title, if it has one."""
+        path = self._game_icons / f"{tid.upper()}.jpg" if tid else None
+        return path if path and path.is_file() else None
+
+    def _keep_game_icon(self, tid, source):
+        """Keeps `source` as the title's Game icon, replacing the last; never deleted, so a Build
+        whose files carry none can still give it back to nxnative (_fallback_icon)."""
+        output = self._game_icons / f"{tid.upper()}.jpg"
+        part = output.with_name(output.name + ".partial")
+        try:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, part)  # a new modified time, so the page asks for the new art
+            os.replace(part, output)
+            return output
         except OSError as e:
-            log.warning("Couldn't keep the icon of %s: %s", job.name, e)
-        self._records.set_game(job.game_id, tid, name.strip(), kept)
+            part.unlink(missing_ok=True)
+            log.warning("Couldn't keep the Game icon of %s: %s", tid, e)
+            return None
+
+    def _fallback_icon(self, game):
+        """What a Build gives nxnative with `--fallback-icon`, for a game whose files carry no icon:
+        the title's Game icon, else its eShop art, else nothing."""
+        if not game or not game.title_id:
+            return None
+        return self._game_icon(game.title_id) or self._titledb.art(game.title_id)
 
     def _named(self, game):
         """What a Build's `game` event said about this game ({title_id, name, icon}), or None
@@ -517,8 +557,14 @@ class SwitchPlayerApp:
         destination = self._save_root / game.title_id / "save" if source else None
         if source and migration.first_build(source, destination):  # never cut short: Stop waits for it
             job.say(f"── Brought NX Play's save across to {destination}")
+        options = values["build_options"].get(job.game_id, "")
+        fallback = self._fallback_icon(game)
+        player_icon, player_fallbacks = nxnative.icon_options(options)
+        given = [fallback] if fallback and not player_icon and not player_fallbacks else []
+        given += [copy.path / Path(value).expanduser() for value in player_fallbacks]  # as nxnative reads them, from its copy
+        self._build_icons[job.game_id] = (player_icon, {path.resolve() for path in given})
         command = nxnative.build_command(copy, environment, job.path, keys_file=values["keys_file"],
-                                         options=values["build_options"].get(job.game_id, ""))
+                                         options=options, fallback_icon=fallback)
         job.progress = None  # the build script's own events take over
         return command
 
@@ -676,21 +722,64 @@ class SwitchPlayerApp:
                     return
 
     def _art_path(self, game):
-        """The eShop's art, else the Game app's own icon, else the icon a Build's `game` event gave
-        (the one its Game app will get), else none: a plain tile."""
-        art = self._titledb.art(game.title_id)
-        if art:
-            return art
+        """The Art on a Game's tile: the eShop's, else the Game icon (its Game app's, else the one
+        Switch Player keeps for the title, which a first Build's `game` event gives about a minute
+        in), else none: a plain tile with the name."""
+        self._tidy_icons(game)
+        app_icon = self._app_icon(game)
+        return self._titledb.art(game.title_id) or app_icon or self._game_icon(game.title_id)
+
+    def _app_icon(self, game):
+        """The Game app's icon as a JPEG (Icons/<game id>-<mtime_ns>.jpg), converted once for each
+        icon the Game app gets; the copy before it goes. A Game app whose last Build's icon was the
+        game's own (or one built before Switch Player recorded that) also gives the title's Game
+        icon; one given a stand-in or the player's `--icon` doesn't."""
         icon = game.app.path / "Contents" / "Resources" / "AppIcon.icns" if game.app else None
-        if icon and icon.is_file():
-            output = self._data_dir / "Icons" / f"{builds.safe_name(game.id)}-{icon.stat().st_mtime_ns}.jpg"
-            if not output.is_file():
-                self._native.convert_icon(icon, output)
-            if output.is_file():
-                return output
+        try:
+            output = self._icons / f"{builds.safe_name(game.id)}-{icon.stat().st_mtime_ns}.jpg" if icon else None
+        except OSError:
+            return None
+        if not output or output in self._icons_failed:
+            return None
+        if output.is_file():
+            return output
+        self._native.convert_icon(icon, output)
+        if not output.is_file():
+            self._icons_failed.add(output)
+            return None
+        for _, older in self._app_icon_copies(game.id)[:-1]:
+            older.unlink(missing_ok=True)
         named = self._named(game)
-        kept = self._build_icons / Path(named["icon"]).name if named and named["icon"] else None
-        return kept if kept and kept.is_file() else None
+        if game.title_id and (named is None or named["icon"]):
+            self._keep_game_icon(game.title_id, output)
+        return output
+
+    def _app_icon_copies(self, game_id):
+        """[(mtime_ns, path)] of the Game app icons converted for a game, oldest first."""
+        pattern = re.compile(re.escape(builds.safe_name(game_id)) + r"-(\d+)\.jpg")
+        try:
+            names = os.listdir(self._icons)
+        except OSError:
+            return []
+        return sorted((int(m.group(1)), self._icons / name) for name in names if (m := pattern.fullmatch(name)))
+
+    def _tidy_icons(self, game):
+        """Once a launch for each Game: a Game without a kept Game icon takes it from its newest
+        converted Game app icon (the one its tile showed; before 0.1.11 Switch Player kept no
+        other), else from the copy an earlier version kept of a Build's `game` event icon. Then
+        the older converted copies go: before 0.1.11 each Build left one more."""
+        if game.id in self._icons_tidied:
+            return
+        self._icons_tidied.add(game.id)
+        copies = self._app_icon_copies(game.id)
+        if game.title_id and not self._game_icon(game.title_id):
+            named = self._named(game)
+            earlier = self._icons / "Builds" / Path(named["icon"]).name if named and named["icon"] else None
+            source = copies[-1][1] if copies else earlier if earlier and earlier.is_file() else None
+            if source:
+                self._keep_game_icon(game.title_id, source)
+        for _, older in copies[:-1]:
+            older.unlink(missing_ok=True)
 
     def _game_log(self, game):
         if self._data_dir == DATA_DIR and not os.environ.get("SWITCHPLAYER_DATA_DIR"):

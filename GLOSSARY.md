@@ -22,6 +22,14 @@ _Avoid_: NSP folder, ROM folder
 The Mac app nxnative makes from a Game folder, kept in that Game folder. It carries the nxnative code it was built with.
 _Avoid_: build, port, wrapper
 
+**Art**:
+The image on a Game's tile: the eShop's, else the Game icon.
+_Avoid_: artwork, cover, thumbnail
+
+**Game icon**:
+The icon the game itself carries, which its Game app gets. Switch Player keeps the last one per title and gives it back to nxnative when a Game folder's files have none.
+_Avoid_: app icon (that's Switch Player's own), fallback icon (that's what a Build passes when the game has none)
+
 ### Building
 
 **Build**:

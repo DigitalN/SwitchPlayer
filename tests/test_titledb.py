@@ -104,6 +104,32 @@ def test_a_title_the_list_lacks_waits_a_week(tmp_path):
     assert net.calls.count(titledb.LIST_URL) == 2
 
 
+@pytest.mark.parametrize("old_list", ["https://raw.githubusercontent.com/blawar/titledb/master/US.en.json", None])
+def test_titles_another_list_lacked_are_asked_about_again_at_once(tmp_path, old_list):
+    """0.1.11 moved from blawar/titledb, which skips Switch 2 games, to borntohonk's fork: what the
+    old list lacked isn't left waiting out its week."""
+    switch2 = "0400486024DEC000"
+    index = {"fetched": time.time(), "titles": {MARIO: {"name": "Super Mario Party Jamboree", "icon": "https://img-eshop.cdn.nintendo.net/i/mario.jpg"}},
+             "missing": [switch2]}
+    if old_list:
+        index["list"] = old_list
+    (tmp_path / "index.json").write_text(json.dumps(index))
+    listing = {**LIST, "70010000130792": {"id": switch2, "name": "Ocarina of Time™", "nsuId": 70010000130792,
+                                          "iconUrl": "https://img-eshop.cdn.nintendo.net/i/ocarina.jpg"}}
+    net = FakeNet(listing=listing, images={"https://img-eshop.cdn.nintendo.net/i/ocarina.jpg": JPEG})
+    assert titledb.TitleDB(tmp_path, download=net).update([switch2, MARIO]) == {switch2}
+    assert net.calls.count(titledb.LIST_URL) == 1
+    assert json.loads((tmp_path / "index.json").read_text())["list"] == titledb.LIST_URL
+    db = titledb.TitleDB(tmp_path, download=net)
+    assert db.name(switch2) == "Ocarina of Time" and db.art(switch2).read_bytes() == JPEG
+
+    # Once: a title the new list lacks too waits its week as before.
+    gone = "0400000000010000"
+    titledb.TitleDB(tmp_path, download=net).update([gone])
+    titledb.TitleDB(tmp_path, download=net).update([gone])
+    assert net.calls.count(titledb.LIST_URL) == 2
+
+
 def test_a_new_game_brings_the_list_back_once_a_launch(tmp_path):
     net = FakeNet(listing=None)  # offline
     db = titledb.TitleDB(tmp_path, download=net)
