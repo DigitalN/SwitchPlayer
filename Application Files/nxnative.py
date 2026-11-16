@@ -398,9 +398,32 @@ def _base_env():
     return env
 
 
-def build_command(copy, environment, game_path, keys_file=None, options=""):
+def icon_options(options):
+    """What a Game's Build options say about its icon: whether they name `--icon`, and the files
+    any `--fallback-icon` names, as typed. Nothing for options that can't be read (the Build then
+    fails on them)."""
+    try:
+        words = shlex.split(options or "")
+    except ValueError:
+        return False, []
+    icon, fallbacks = False, []
+    for i, word in enumerate(words):
+        name, _, value = word.partition("=")
+        if name == "--icon":
+            icon = True
+        elif name == "--fallback-icon":
+            if value or "=" in word:
+                fallbacks.append(value)
+            elif i + 1 < len(words):
+                fallbacks.append(words[i + 1])
+    return icon, fallbacks
+
+
+def build_command(copy, environment, game_path, keys_file=None, options="", fallback_icon=None):
     """(argv, working folder, environment) for one Build of the Game folder or .nup at
-    `game_path`. Keys aren't needed for a .nup."""
+    `game_path`. Keys aren't needed for a .nup. `fallback_icon` is the icon the Game app gets
+    only when the game carries none of its own (nxnative's `--fallback-icon`), left out when the
+    Build options name an icon themselves: the player's choice wins."""
     try:
         extra = shlex.split(options or "")
     except ValueError as e:
@@ -408,6 +431,9 @@ def build_command(copy, environment, game_path, keys_file=None, options=""):
     argv = [str(environment.python), str(copy.script), str(game_path), "--platform", "mac-app", "--progress", "json"]
     if keys_file and Path(game_path).suffix.lower() != ".nup":
         argv += ["-k", str(keys_file)]
+    icon, fallbacks = icon_options(options)
+    if fallback_icon and not icon and not fallbacks:
+        argv += ["--fallback-icon", str(fallback_icon)]
     env = _base_env()
     env["PATH"] = os.pathsep.join([str(environment.venv / "bin")] + TOOL_PATHS + SYSTEM_PATHS)
     env["PYTHONUNBUFFERED"] = "1"  # its events arrive as they happen

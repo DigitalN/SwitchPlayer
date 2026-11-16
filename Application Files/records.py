@@ -13,9 +13,10 @@ The commit is for the same reason: nxnative's packer writes `DMCommit` only when
 app anew, so a Build whose changes didn't reach the game's packed files leaves the old one (#20).
 The changes since a Build are counted from whichever is newer, so a Rebuild always clears them.
 
-The name and icon come from the build script's `game` event, about a minute into a Build, and are
-kept as soon as it arrives: a Build that then stops or fails, or a relaunch, still shows them
-until the Game app exists to speak for itself.
+The name comes from the build script's `game` event, about a minute into a Build, and is kept as
+soon as it arrives: a Build that then stops or fails, or a relaunch, still shows it until the Game
+app exists to speak for itself. So does whether that Build's icon was the game's own (the Game
+icon itself is kept per title, in Icons/Games/).
 """
 
 import json
@@ -68,7 +69,8 @@ class Records:
 
     def game(self, game_id):
         """{title_id, name, icon} as the build script's `game` event named the game, icon being the
-        file name of Switch Player's copy (or None without one), or None before any such event."""
+        file name of the Game icon it gave (None when its icon wasn't the game's own, or it had
+        none), or None before any such event."""
         with self._lock:
             record = self._games.get(game_id, {}).get("game")
             return dict(record) if record else None

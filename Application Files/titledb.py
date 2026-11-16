@@ -1,14 +1,20 @@
-"""Names and art for the Library's games, from the eShop's listings in blawar/titledb.
+"""Names and Art for the Library's games, from the eShop's listings in borntohonk/titledb.
 
 Adapted from NX Play's ArtworkStore (Packages/NXPlayKit/Sources/NXPlayKit/Model/Artwork.swift
-in varyform/nx-native-wrapper; MIT, see THIRD-PARTY-NOTICES): the same list, the same
-choice when a title is listed twice, and images from Nintendo's CDN only.
+in varyform/nx-native-wrapper; MIT, see THIRD-PARTY-NOTICES): the same choice when a title is
+listed twice, and images from Nintendo's CDN only.
 
-The list (US.en.json: about 26 MB as downloaded, 90 MB unpacked) is fetched only when a game
-appears that the saved index doesn't know, at most once a launch, and read one entry at a
-time: parsed whole, it took 650 MB. Only the Library's titles are kept, in index.json. A title
-the list lacks is asked about again once the index is a week old, as new games are added.
-Each game's art, the eShop's 1024×1024 icon, is downloaded once and kept.
+The list is borntohonk/titledb's US.en.json (MIT), a fork of blawar/titledb, which NX Play
+used, with the same entries (`id`, `name`, `iconUrl`, `nsuId`): blawar's skips Switch 2
+games, and the fork lists them, updated weekly (changed in 0.1.11, for Ocarina of Time,
+whose .nup carries no icon of its own).
+
+The list (about 100 MB unpacked) is fetched only when a game appears that the saved index
+doesn't know, at most once a launch, and read one entry at a time: parsed whole, it took
+650 MB. Only the Library's titles are kept, in index.json, which names the list they came
+from. A title the list lacks is asked about again once the index is a week old, as new
+games are added, or at once when the index came from another list. Each game's Art, the
+eShop's 1024×1024 icon, is downloaded once and kept.
 
 Downloads go through /usr/bin/curl, which uses the system's certificates (the bundled
 Python has none of its own).
@@ -29,7 +35,7 @@ import library
 
 log = logging.getLogger("switchplayer")
 
-LIST_URL = "https://raw.githubusercontent.com/blawar/titledb/master/US.en.json"
+LIST_URL = "https://raw.githubusercontent.com/borntohonk/titledb/master/US.en.json"
 IMAGE_HOST = "img-eshop.cdn.nintendo.net"  # the list is third-party data: images only from here
 MISSING_LIFETIME = 7 * 86400
 
@@ -159,12 +165,14 @@ class TitleDB:
             with open(self.folder / "index.json", encoding="utf-8") as f:
                 index = json.load(f)
         except (OSError, ValueError):
-            return {"fetched": 0, "titles": {}, "missing": []}
+            return {"fetched": 0, "titles": {}, "missing": [], "list": self._list_url}
         titles = index.get("titles") if isinstance(index.get("titles"), dict) else {}
         missing = index.get("missing") if isinstance(index.get("missing"), list) else []
         fetched = index.get("fetched") if isinstance(index.get("fetched"), (int, float)) else 0
+        if index.get("list") != self._list_url:
+            missing = []  # what another list lacked, this one may have: asked about again at once
         return {"fetched": fetched, "titles": {k: v for k, v in titles.items() if isinstance(v, dict)},
-                "missing": [m for m in missing if isinstance(m, str)]}
+                "missing": [m for m in missing if isinstance(m, str)], "list": self._list_url}
 
     def _save(self, index):
         self.folder.mkdir(parents=True, exist_ok=True)
@@ -198,7 +206,8 @@ class TitleDB:
                 if found is not None:
                     changed |= {t for t in found if found[t] != index["titles"].get(t)}
                     asked = set(tids) | set(index["titles"]) | set(index["missing"])
-                    index = {"fetched": time.time(), "titles": found, "missing": sorted(asked - set(found))}
+                    index = {"fetched": time.time(), "titles": found, "missing": sorted(asked - set(found)),
+                             "list": self._list_url}
                     self._save(index)
             for tid in tids:
                 icon = (index["titles"].get(tid) or {}).get("icon")

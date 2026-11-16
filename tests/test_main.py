@@ -1755,14 +1755,16 @@ def test_a_game_event_without_an_icon_or_a_name_or_for_another_title(tmp_path):
     app = ocarina_app(tmp_path, folder)
     api = main.Api(app)
     job = builds.Job(game_id="Ocarina of Time", path=folder, name="Ocarina of Time")
-    kept = tmp_path / "data" / "Icons" / "Builds" / "Ocarina of Time.jpg"
+    kept = tmp_path / "data" / "Icons" / "Games" / f"{OCARINA}.jpg"
     app._build_named(job, game_event(icon))
-    assert kept.is_file()
+    assert kept.read_bytes() == b"\xff\xd8\xffown icon"
 
-    app._build_named(job, game_event(icon, icon=None))  # a later Build's: the game has no icon now
-    assert not kept.exists()
+    # A later Build's, from a .nup that carries no icon: the Game icon kept from before stays.
+    app._build_named(job, game_event(icon, icon=None))
+    assert kept.read_bytes() == b"\xff\xd8\xffown icon"
     game = api.library()["games"][0]
-    assert (game["name"], game["art"]) == ("The Legend of Zelda: Ocarina of Time", None)  # a plain tile with its name
+    assert game["name"] == "The Legend of Zelda: Ocarina of Time"
+    assert api.art("Ocarina of Time") == jpeg(b"\xff\xd8\xffown icon")
 
     app._build_named(job, game_event(icon, title_id="zelda"))
     app._build_named(job, game_event(icon, name=None))
@@ -1772,7 +1774,158 @@ def test_a_game_event_without_an_icon_or_a_name_or_for_another_title(tmp_path):
     # The Game folder has come to hold another title: what the event said was about the last one.
     (folder / f"{OCARINA}_build").rename(folder / "0100D9F01D474000_build")
     app._last_scan = None
-    assert api.library()["games"][0]["name"] == "Ocarina of Time"
+    game = api.library()["games"][0]
+    assert (game["name"], game["art"]) == ("Ocarina of Time", None)  # a plain tile with the Game folder's name
+    assert kept.is_file()  # still Ocarina of Time's
+
+
+def prepare_ocarina(app, monkeypatch, options=""):
+    """The build script's command line for a Build of Ocarina of Time, with these Build options."""
+    monkeypatch.setattr(nxnative.Copy, "update", lambda self, **kwargs: "fedcba987654")
+    monkeypatch.setattr(nxnative.Copy, "build_commit", lambda self: "fedcba987654")
+    monkeypatch.setattr(nxnative.Environment, "ready", lambda self: True)
+    monkeypatch.setattr(nxnative.Environment, "ensure", lambda self, **kwargs: None)
+    app._settings.set_build_options("Ocarina of Time", options)
+    app._library()
+    job = builds.Job(game_id="Ocarina of Time", path=app._games["Ocarina of Time"].path, name="Ocarina of Time")
+    argv, _, _ = app._prepare(job)
+    return job, argv
+
+
+def fallback_in(argv):
+    return argv[argv.index("--fallback-icon") + 1] if "--fallback-icon" in argv else None
+
+
+def eshop_art(tmp_path, data=b"\xff\xd8\xffeshop"):
+    art = tmp_path / "data" / "titledb" / "art" / f"{OCARINA}.jpg"
+    art.parent.mkdir(parents=True, exist_ok=True)
+    art.write_bytes(data)
+    return art
+
+
+def test_every_build_gives_the_game_icon_else_the_eshop_art_as_its_fallback_icon(tmp_path, monkeypatch):
+    """A .nup may carry no icon (Ocarina of Time's of the base game and update doesn't): nxnative
+    then gives the Game app the --fallback-icon, which never replaces a game's own."""
+    folder, icon = ocarina(tmp_path)
+    app = ocarina_app(tmp_path, folder)
+    kept = tmp_path / "data" / "Icons" / "Games" / f"{OCARINA}.jpg"
+
+    assert fallback_in(prepare_ocarina(app, monkeypatch)[1]) is None  # nothing to give yet
+    art = eshop_art(tmp_path)
+    assert fallback_in(prepare_ocarina(app, monkeypatch)[1]) == str(art)
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"\xff\xd8\xffgame icon")
+    assert fallback_in(prepare_ocarina(app, monkeypatch)[1]) == str(kept)
+
+    # Build options that name an icon win, and are passed as typed.
+    for options in ("--icon ~/mine.png", "--icon=/x/mine.png", "--fallback-icon /x/spare.png", "--fallback-icon=/x/spare.png"):
+        _, argv = prepare_ocarina(app, monkeypatch, options)
+        assert argv.count("--fallback-icon") + sum(a.startswith("--fallback-icon=") for a in argv) == options.count("--fallback-icon")
+        assert str(kept) not in argv and str(art) not in argv
+        assert argv[-1].endswith(".png")
+
+
+def test_only_the_games_own_icon_becomes_its_game_icon(tmp_path, monkeypatch):
+    folder, icon = ocarina(tmp_path)
+    app = ocarina_app(tmp_path, folder)
+    kept = tmp_path / "data" / "Icons" / "Games" / f"{OCARINA}.jpg"
+
+    # The stand-in Switch Player gave, which nxnative names by its resolved path.
+    art = eshop_art(tmp_path)
+    job, argv = prepare_ocarina(app, monkeypatch)
+    assert fallback_in(argv) == str(art)
+    app._build_named(job, game_event(art.resolve()))
+    assert not kept.exists()
+    assert app._records.game("Ocarina of Time")["icon"] is None
+
+    # The player's --icon, and a --fallback-icon of theirs, named relative to the nxnative copy.
+    mine = tmp_path / "mine.jpg"
+    mine.write_bytes(b"\xff\xd8\xffmine")
+    job, _ = prepare_ocarina(app, monkeypatch, f"--icon '{mine}'")
+    app._build_named(job, game_event(mine))
+    assert not kept.exists()
+    spare = tmp_path / "data" / "nxnative" / "spare.jpg"
+    spare.parent.mkdir(parents=True, exist_ok=True)
+    spare.write_bytes(b"\xff\xd8\xffspare")
+    job, _ = prepare_ocarina(app, monkeypatch, "--fallback-icon spare.jpg")
+    app._build_named(job, game_event(spare.resolve()))
+    assert not kept.exists()
+
+    # A Game app built with one of those doesn't give the Game icon either.
+    resources = folder / "The Legend of Zelda - Ocarina of Time.app" / "Contents" / "Resources"
+    resources.mkdir(parents=True)
+    (resources.parent / "Info.plist").write_bytes(plistlib.dumps({"DMTitleID": OCARINA, "CFBundleDisplayName": "Zelda"}))
+    (resources / "AppIcon.icns").write_bytes(b"spare")
+    app._last_scan = None
+    app._library()
+    assert not kept.exists()
+
+    # The icon nxnative extracted from the game's own files.
+    job, argv = prepare_ocarina(app, monkeypatch)
+    app._build_named(job, game_event(icon))
+    assert kept.read_bytes() == b"\xff\xd8\xffown icon"
+    assert app._records.game("Ocarina of Time")["icon"] == f"{OCARINA}.jpg"
+    app._build_finished(job, True)
+
+    # Its Game app, when the next Build gives it a new icon of the game's own, keeps it up to date.
+    (resources / "AppIcon.icns").write_bytes(b"new own icon")
+    later = time.time() + 5
+    __import__("os").utime(resources / "AppIcon.icns", (later, later))
+    app._last_scan = None
+    app._library()
+    assert kept.read_bytes() == b"\xff\xd8\xffnew own icon"
+    assert fallback_in(prepare_ocarina(app, monkeypatch)[1]) == str(kept)
+
+
+def test_first_launch_seeds_the_game_icon_from_the_tiles_icon_and_tidies_the_icon_cache(tmp_path, monkeypatch):
+    """Before 0.1.11 the only copy of a game's icon was its tile's, converted from the Game app's
+    icon, one more at every Build. Ocarina of Time's Game app now has none."""
+    folder, _ = ocarina(tmp_path)
+    contents = folder / "The Legend of Zelda - Ocarina of Time.app" / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({"DMTitleID": OCARINA, "CFBundleDisplayName": "Zelda"}))
+    icons = tmp_path / "data" / "Icons"
+    icons.mkdir(parents=True)
+    for mtime in (100, 900, 30):
+        (icons / f"Ocarina of Time-{mtime}.jpg").write_bytes(b"\xff\xd8\xff%d" % mtime)
+    (icons / "Ocarina of Time 2-50.jpg").write_bytes(b"another Game's")
+    app = ocarina_app(tmp_path, folder)
+    api = main.Api(app)
+
+    assert api.library()["games"][0]["art"] is not None
+    assert api.art("Ocarina of Time") == jpeg(b"\xff\xd8\xff900")  # the Game icon, with no eShop art
+    assert (icons / "Games" / f"{OCARINA}.jpg").read_bytes() == b"\xff\xd8\xff900"
+    assert sorted(p.name for p in icons.glob("*.jpg")) == ["Ocarina of Time 2-50.jpg", "Ocarina of Time-900.jpg"]
+
+    # The eShop art still comes first, and a Game icon kept already isn't seeded over.
+    eshop_art(tmp_path)
+    (icons / "Ocarina of Time-1000.jpg").write_bytes(b"\xff\xd8\xff1000")
+    again = main.Api(ocarina_app(tmp_path, folder))
+    assert again.library()["games"][0]["art"] is not None
+    assert again.art("Ocarina of Time") == jpeg(b"\xff\xd8\xffeshop")
+    assert (icons / "Games" / f"{OCARINA}.jpg").read_bytes() == b"\xff\xd8\xff900"
+    assert not (icons / "Ocarina of Time-900.jpg").exists()
+
+    # From now on each new Game app icon replaces the last copy instead of adding one.
+    (contents / "Resources").mkdir()
+    for n in range(3):
+        (contents / "Resources" / "AppIcon.icns").write_bytes(b"build %d" % n)
+        later = time.time() + 10 * (n + 1)
+        __import__("os").utime(contents / "Resources" / "AppIcon.icns", (later, later))
+        app._last_scan = None
+        app._library()
+        assert len(list(icons.glob("Ocarina of Time-*.jpg"))) == 1
+    assert (icons / "Games" / f"{OCARINA}.jpg").read_bytes() == b"\xff\xd8\xffbuild 2"
+
+
+def test_a_game_that_leaves_the_library_keeps_its_game_icon(tmp_path):
+    folder, icon = ocarina(tmp_path)
+    app = ocarina_app(tmp_path, folder)
+    app._build_named(builds.Job(game_id="Ocarina of Time", path=folder, name="Ocarina of Time"), game_event(icon))
+    __import__("shutil").rmtree(folder)
+    app._last_scan = None
+    assert main.Api(app).library()["games"] == []
+    assert (tmp_path / "data" / "Icons" / "Games" / f"{OCARINA}.jpg").is_file()
 
 
 def test_the_tile_takes_the_game_events_name_while_its_build_runs(tmp_path, monkeypatch):
